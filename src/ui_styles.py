@@ -216,21 +216,38 @@ hr { border-color: #DDD6FE !important; margin: 1.5rem 0 !important; }
     background: linear-gradient(90deg, #7C3AED, #8B5CF6) !important;
     border-radius: 4px !important;
 }
-/* Progress text label — override dark pill default */
-[data-testid="stProgressBar"] p,
-[data-testid="stProgressBar"] small,
-[data-testid="stProgressBar"] ~ div p,
-.stProgress p,
-.stProgress small,
-div[class*="StatusWidget"] p,
-div[class*="StatusWidget"] span {
-    color: #1E1B4B !important;
-    background: rgba(255, 255, 255, 0.85) !important;
+/* Progress text label — scoped tightly to progress bar only */
+[data-testid="stProgressBar"] > div:first-child,
+[data-testid="stProgressBar"] > p,
+[data-testid="stProgressBar"] > label {
+    color: #4C1D95 !important;
+    background: rgba(237, 233, 254, 0.9) !important;
     border-radius: 6px !important;
     padding: 2px 8px !important;
     font-size: 0.82rem !important;
     font-weight: 500 !important;
     display: inline-block !important;
+}
+
+/* ── Info / Warning / Error alerts — brand colors ───────────────────────────── */
+[data-testid="stAlert"][kind="info"],
+div[data-baseweb="notification"][kind="info"] {
+    background: #EDE9FE !important;
+    border-left-color: #7C3AED !important;
+    color: #1E1B4B !important;
+}
+[data-testid="stAlert"][kind="info"] p,
+[data-testid="stAlert"][kind="info"] strong {
+    color: #1E1B4B !important;
+    background: transparent !important;
+}
+[data-testid="stAlert"][kind="warning"] p,
+[data-testid="stAlert"][kind="warning"] strong,
+[data-testid="stAlert"][kind="success"] p,
+[data-testid="stAlert"][kind="success"] strong,
+[data-testid="stAlert"][kind="error"] p,
+[data-testid="stAlert"][kind="error"] strong {
+    background: transparent !important;
 }
 </style>
 """
