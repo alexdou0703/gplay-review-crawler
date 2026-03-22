@@ -105,12 +105,18 @@ if crawl_btn and user_input:
         st.session_state.current_package_id = pkg_id
         st.session_state.current_df = get_reviews(pkg_id, DB_PATH)
 
-        st.success(
-            f"Crawled **{len(raw)}** reviews | "
-            f"New rows inserted: **{inserted}** | "
-            f"Total stored for this app: **{total_stored}**"
-        )
-        st.rerun()
+        if len(raw) == 0:
+            st.warning(
+                f"⚠️ No reviews found for **{pkg_id}**. "
+                "The app may be new, have no public reviews yet, or not available in this language."
+            )
+        else:
+            st.success(
+                f"✅ Crawled **{len(raw)}** reviews | "
+                f"New: **{inserted}** | "
+                f"Total stored: **{total_stored}**"
+            )
+            st.rerun()
 
     except ValueError as e:
         st.error(f"Could not resolve app: {e}")
