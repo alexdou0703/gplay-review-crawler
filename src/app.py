@@ -15,7 +15,7 @@ from storage.sqlite_store import (
     init_db, save_reviews, get_reviews, list_packages, count_reviews,
     save_app_name, list_packages_with_names,
 )
-from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML
+from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
 
 # --- Config ---
 # Try local data/ dir first; fall back to /tmp on read-only cloud filesystems (Streamlit Cloud)
@@ -89,7 +89,7 @@ if crawl_btn and user_input:
         effective_country = "us"
         app_title = fetch_app_name(pkg_id, country=effective_country)
         save_app_name(pkg_id, app_title, DB_PATH)
-        st.info(f"**{app_title}** (`{pkg_id}`) — crawling up to {count} reviews...")
+        st.markdown(info_box(f"<strong>{app_title}</strong> <code>{pkg_id}</code> — crawling up to {count} reviews..."), unsafe_allow_html=True)
 
         if lang == "All languages":
             progress_bar = st.progress(0, text="Starting multi-language crawl...")
@@ -117,22 +117,22 @@ if crawl_btn and user_input:
         st.session_state.current_df = get_reviews(pkg_id, DB_PATH)
 
         if len(raw) == 0:
-            st.warning(
-                f"No reviews found for **{pkg_id}**. "
+            st.markdown(warning_box(
+                f"No reviews found for <strong>{pkg_id}</strong>. "
                 "The app may be new, have no public reviews yet, or not available in this language."
-            )
+            ), unsafe_allow_html=True)
         else:
-            st.success(
-                f"Fetched **{len(raw)}** reviews — "
-                f"**{inserted}** new added — "
-                f"**{total_stored}** total stored"
-            )
+            st.markdown(success_box(
+                f"Fetched <strong>{len(raw)}</strong> reviews — "
+                f"<strong>{inserted}</strong> new added — "
+                f"<strong>{total_stored}</strong> total stored"
+            ), unsafe_allow_html=True)
             st.rerun()
 
     except ValueError as e:
-        st.error(f"Could not resolve app: {e}")
+        st.markdown(error_box(f"Could not resolve app: {e}"), unsafe_allow_html=True)
     except Exception as e:
-        st.error(f"Crawl failed: {e}")
+        st.markdown(error_box(f"Crawl failed: {e}"), unsafe_allow_html=True)
 
 # --- Results ---
 if "current_df" in st.session_state and not st.session_state.current_df.empty:

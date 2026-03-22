@@ -205,8 +205,43 @@ h2, h3 {
     cursor: pointer !important;
 }
 
-/* ── Alerts ─────────────────────────────────────────────────────────────────── */
-.stAlert { border-radius: 10px !important; }
+/* ── Custom brand alert boxes ───────────────────────────────────────────────── */
+.drava-info {
+    background: #EDE9FE;
+    border-left: 4px solid #7C3AED;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    color: #1E1B4B;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+.drava-success {
+    background: #ECFDF5;
+    border-left: 4px solid #10B981;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    color: #065F46;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+.drava-warning {
+    background: #FFFBEB;
+    border-left: 4px solid #F59E0B;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    color: #78350F;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+.drava-error {
+    background: #FEF2F2;
+    border-left: 4px solid #EF4444;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    color: #7F1D1D;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
 
 /* ── Divider ────────────────────────────────────────────────────────────────── */
 hr { border-color: #DDD6FE !important; margin: 1.5rem 0 !important; }
@@ -229,26 +264,6 @@ hr { border-color: #DDD6FE !important; margin: 1.5rem 0 !important; }
     display: inline-block !important;
 }
 
-/* ── Info / Warning / Error alerts — brand colors ───────────────────────────── */
-[data-testid="stAlert"][kind="info"],
-div[data-baseweb="notification"][kind="info"] {
-    background: #EDE9FE !important;
-    border-left-color: #7C3AED !important;
-    color: #1E1B4B !important;
-}
-[data-testid="stAlert"][kind="info"] p,
-[data-testid="stAlert"][kind="info"] strong {
-    color: #1E1B4B !important;
-    background: transparent !important;
-}
-[data-testid="stAlert"][kind="warning"] p,
-[data-testid="stAlert"][kind="warning"] strong,
-[data-testid="stAlert"][kind="success"] p,
-[data-testid="stAlert"][kind="success"] strong,
-[data-testid="stAlert"][kind="error"] p,
-[data-testid="stAlert"][kind="error"] strong {
-    background: transparent !important;
-}
 </style>
 """
 
@@ -355,3 +370,17 @@ FOOTER_HTML = """
     <div class="drava-footer-copy">© 2026 Dravastudio. All rights reserved.</div>
 </div>
 """
+
+
+# ── Alert box helpers ─────────────────────────────────────────────────────────
+def info_box(msg: str) -> str:
+    return f'<div class="drava-info">{msg}</div>'
+
+def success_box(msg: str) -> str:
+    return f'<div class="drava-success">{msg}</div>'
+
+def warning_box(msg: str) -> str:
+    return f'<div class="drava-warning">{msg}</div>'
+
+def error_box(msg: str) -> str:
+    return f'<div class="drava-error">{msg}</div>'
