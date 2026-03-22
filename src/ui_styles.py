@@ -251,17 +251,20 @@ hr { border-color: #DDD6FE !important; margin: 1.5rem 0 !important; }
     background: linear-gradient(90deg, #7C3AED, #8B5CF6) !important;
     border-radius: 4px !important;
 }
-/* Progress text label — scoped tightly to progress bar only */
-[data-testid="stProgressBar"] > div:first-child,
-[data-testid="stProgressBar"] > p,
-[data-testid="stProgressBar"] > label {
+/* Progress text label — catch all possible Streamlit DOM structures */
+.stProgress p,
+.stProgress span,
+.stProgress label,
+.stProgress div > p,
+[data-testid="stProgressBar"] p,
+[data-testid="stProgressBar"] span,
+[data-testid="stProgressBar"] label,
+[data-testid="stProgressBar"] div > p,
+[data-testid="stProgressBarMessage"],
+[data-testid="stProgressBarMessage"] * {
     color: #4C1D95 !important;
-    background: rgba(237, 233, 254, 0.9) !important;
-    border-radius: 6px !important;
-    padding: 2px 8px !important;
     font-size: 0.82rem !important;
-    font-weight: 500 !important;
-    display: inline-block !important;
+    font-weight: 600 !important;
 }
 
 </style>
