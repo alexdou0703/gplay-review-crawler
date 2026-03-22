@@ -146,13 +146,16 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
     with hcol_title:
         st.subheader(f"Reviews — {pkg} ({len(df)} total)")
 
-    # Star filter
-    selected_stars = st.multiselect(
-        "Filter by rating",
-        options=[5, 4, 3, 2, 1],
-        default=[5, 4, 3, 2, 1],
-        format_func=lambda x: "⭐" * x,
-    )
+    # Rating filter — 5 checkboxes always visible with counts per rating
+    rating_counts = df["score"].value_counts()
+    st.markdown("<p style='font-size:0.875rem;font-weight:500;color:#374151;margin-bottom:0.25rem'>Show ratings</p>", unsafe_allow_html=True)
+    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+    selected_stars = []
+    for col, star in zip([rc1, rc2, rc3, rc4, rc5], [5, 4, 3, 2, 1]):
+        cnt = int(rating_counts.get(star, 0))
+        with col:
+            if st.checkbox(f"{'⭐' * star}  {cnt}", value=True, key=f"star_filter_{star}"):
+                selected_stars.append(star)
     filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
 
     # Export buttons — top-right, always visible before table

@@ -177,6 +177,30 @@ h2, h3 {
     background: #FFFFFF !important;
 }
 
+/* ── Rating filter checkboxes as pill cards ─────────────────────────────────── */
+.block-container [data-testid="stCheckbox"] {
+    background: #FFFFFF !important;
+    border: 1.5px solid #EDE9FE !important;
+    border-radius: 10px !important;
+    padding: 0.4rem 0.75rem !important;
+    transition: border-color 0.2s, background 0.2s !important;
+}
+.block-container [data-testid="stCheckbox"]:has(input:checked) {
+    background: #F5F3FF !important;
+    border-color: #7C3AED !important;
+}
+.block-container [data-testid="stCheckbox"]:hover {
+    border-color: #7C3AED !important;
+    background: #F5F3FF !important;
+    cursor: pointer !important;
+}
+.block-container [data-testid="stCheckbox"] label {
+    color: #1E1B4B !important;
+    font-weight: 500 !important;
+    font-size: 0.875rem !important;
+    cursor: pointer !important;
+}
+
 /* ── Alerts ─────────────────────────────────────────────────────────────────── */
 .stAlert { border-radius: 10px !important; }
 
