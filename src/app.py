@@ -10,8 +10,11 @@ import streamlit as st
 import pandas as pd
 
 from crawler.url_parser import parse_package_id, parse_url
-from crawler.gplay_crawler import crawl_reviews, crawl_reviews_all_languages, ALL_LANGUAGES
-from storage.sqlite_store import init_db, save_reviews, get_reviews, list_packages, count_reviews
+from crawler.gplay_crawler import crawl_reviews, crawl_reviews_all_languages, ALL_LANGUAGES, fetch_app_name
+from storage.sqlite_store import (
+    init_db, save_reviews, get_reviews, list_packages, count_reviews,
+    save_app_name, list_packages_with_names,
+)
 from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML
 
 # --- Config ---
@@ -38,11 +41,11 @@ init_db(DB_PATH)
 
 # --- Sidebar: previously crawled apps ---
 st.sidebar.title("Crawled Apps")
-packages = list_packages(DB_PATH)
-if packages:
-    for pkg in packages:
+pkg_entries = list_packages_with_names(DB_PATH)
+if pkg_entries:
+    for pkg, app_name in pkg_entries:
         n = count_reviews(pkg, DB_PATH)
-        if st.sidebar.button(f"{pkg}  ({n} reviews)", key=f"sidebar_{pkg}"):
+        if st.sidebar.button(f"{app_name}  ({n})", key=f"sidebar_{pkg}"):
             st.session_state.current_package_id = pkg
             st.session_state.current_df = get_reviews(pkg, DB_PATH)
 else:
@@ -84,7 +87,9 @@ if crawl_btn and user_input:
                 pkg_id = parse_package_id(user_input)
 
         effective_country = "us"
-        st.info(f"Package ID: **{pkg_id}** — crawling up to {count} reviews...")
+        app_title = fetch_app_name(pkg_id, country=effective_country)
+        save_app_name(pkg_id, app_title, DB_PATH)
+        st.info(f"**{app_title}** (`{pkg_id}`) — crawling up to {count} reviews...")
 
         if lang == "All languages":
             progress_bar = st.progress(0, text="Starting multi-language crawl...")

@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS reviews (
     crawled_at         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_package_id ON reviews(package_id);
+CREATE TABLE IF NOT EXISTS apps (
+    package_id  TEXT PRIMARY KEY,
+    app_name    TEXT NOT NULL
+);
 """
 
 
@@ -86,6 +90,27 @@ def list_packages(db_path: str) -> list[str]:
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(sql).fetchall()
     return [r[0] for r in rows]
+
+
+def save_app_name(package_id: str, app_name: str, db_path: str) -> None:
+    """Upsert app display name for a package ID."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO apps (package_id, app_name) VALUES (?, ?)",
+            (package_id, app_name),
+        )
+
+
+def list_packages_with_names(db_path: str) -> list[tuple[str, str]]:
+    """Return (package_id, app_name) for all crawled apps, falling back to package_id."""
+    sql = """
+        SELECT r.package_id, COALESCE(a.app_name, r.package_id)
+        FROM (SELECT DISTINCT package_id FROM reviews) r
+        LEFT JOIN apps a ON a.package_id = r.package_id
+        ORDER BY r.package_id
+    """
+    with sqlite3.connect(db_path) as conn:
+        return conn.execute(sql).fetchall()
 
 
 def count_reviews(package_id: str, db_path: str) -> int:

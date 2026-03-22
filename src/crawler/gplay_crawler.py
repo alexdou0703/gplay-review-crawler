@@ -1,10 +1,19 @@
 """Crawl reviews from Google Play Store using google-play-scraper with pagination."""
 
 import time
-from google_play_scraper import reviews, Sort
+from google_play_scraper import reviews, Sort, app as gplay_app
 
 # Common language codes to use when crawling "all languages"
 ALL_LANGUAGES = ["en", "vi", "zh", "ja", "ko", "fr", "de", "es", "pt", "ru", "ar", "th", "id"]
+
+
+def fetch_app_name(package_id: str, lang: str = "en", country: str = "us") -> str:
+    """Fetch the display title of an app from Google Play. Returns package_id on failure."""
+    try:
+        info = gplay_app(package_id, lang=lang, country=country)
+        return info.get("title", package_id)
+    except Exception:
+        return package_id
 
 
 def crawl_reviews(
