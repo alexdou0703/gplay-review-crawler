@@ -188,6 +188,22 @@ hr { border-color: #DDD6FE !important; margin: 1.5rem 0 !important; }
     background: linear-gradient(90deg, #7C3AED, #8B5CF6) !important;
     border-radius: 4px !important;
 }
+/* Progress text label — override dark pill default */
+[data-testid="stProgressBar"] p,
+[data-testid="stProgressBar"] small,
+[data-testid="stProgressBar"] ~ div p,
+.stProgress p,
+.stProgress small,
+div[class*="StatusWidget"] p,
+div[class*="StatusWidget"] span {
+    color: #1E1B4B !important;
+    background: rgba(255, 255, 255, 0.85) !important;
+    border-radius: 6px !important;
+    padding: 2px 8px !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    display: inline-block !important;
+}
 </style>
 """
 
