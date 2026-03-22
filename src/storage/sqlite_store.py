@@ -1,5 +1,6 @@
 """SQLite storage layer for Google Play reviews."""
 
+import os
 import sqlite3
 import pandas as pd
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_reviews_package_id ON reviews(package_id);
 
 def init_db(db_path: str) -> None:
     """Create reviews table and index if they don't exist."""
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
 

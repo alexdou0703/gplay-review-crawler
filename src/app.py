@@ -14,8 +14,13 @@ from crawler.gplay_crawler import crawl_reviews, crawl_reviews_all_languages, AL
 from storage.sqlite_store import init_db, save_reviews, get_reviews, list_packages, count_reviews
 
 # --- Config ---
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "reviews.db")
-DB_PATH = os.path.abspath(DB_PATH)
+# Try local data/ dir first; fall back to /tmp on read-only cloud filesystems (Streamlit Cloud)
+_local_db = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "reviews.db"))
+try:
+    os.makedirs(os.path.dirname(_local_db), exist_ok=True)
+    DB_PATH = _local_db
+except OSError:
+    DB_PATH = "/tmp/reviews.db"
 
 st.set_page_config(
     page_title="Google Play Review Crawler",
