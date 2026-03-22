@@ -179,23 +179,27 @@ h2, h3 {
 
 /* ── Rating filter checkboxes as pill cards ─────────────────────────────────── */
 .block-container [data-testid="stCheckbox"] {
-    background: #FFFFFF !important;
-    border: 1.5px solid #EDE9FE !important;
+    background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%) !important;
+    border: 1.5px solid #C4B5FD !important;
     border-radius: 10px !important;
     padding: 0.4rem 0.75rem !important;
-    transition: border-color 0.2s, background 0.2s !important;
+    transition: border-color 0.2s, background 0.2s, box-shadow 0.2s !important;
 }
 .block-container [data-testid="stCheckbox"]:has(input:checked) {
-    background: #F5F3FF !important;
-    border-color: #7C3AED !important;
+    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%) !important;
+    border-color: #5B21B6 !important;
+    box-shadow: 0 2px 8px rgba(124,58,237,0.3) !important;
+}
+.block-container [data-testid="stCheckbox"]:has(input:checked) label {
+    color: #FFFFFF !important;
 }
 .block-container [data-testid="stCheckbox"]:hover {
     border-color: #7C3AED !important;
-    background: #F5F3FF !important;
+    box-shadow: 0 2px 8px rgba(124,58,237,0.2) !important;
     cursor: pointer !important;
 }
 .block-container [data-testid="stCheckbox"] label {
-    color: #1E1B4B !important;
+    color: #4C1D95 !important;
     font-weight: 500 !important;
     font-size: 0.875rem !important;
     cursor: pointer !important;
