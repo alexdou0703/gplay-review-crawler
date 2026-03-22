@@ -12,6 +12,7 @@ import pandas as pd
 from crawler.url_parser import parse_package_id, parse_url
 from crawler.gplay_crawler import crawl_reviews, crawl_reviews_all_languages, ALL_LANGUAGES
 from storage.sqlite_store import init_db, save_reviews, get_reviews, list_packages, count_reviews
+from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML
 
 # --- Config ---
 # Try local data/ dir first; fall back to /tmp on read-only cloud filesystems (Streamlit Cloud)
@@ -23,29 +24,34 @@ except OSError:
     DB_PATH = "/tmp/reviews.db"
 
 st.set_page_config(
-    page_title="Google Play Review Crawler",
-    page_icon="🎮",
+    page_title="Dravastudio — Review Crawler",
+    page_icon="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/search/default/24px.svg",
     layout="wide",
 )
+
+# Inject brand styles
+st.markdown(DRAVASTUDIO_CSS, unsafe_allow_html=True)
+st.markdown(FOOTER_CSS_EXTRA, unsafe_allow_html=True)
 
 # Init DB on startup
 init_db(DB_PATH)
 
 # --- Sidebar: previously crawled apps ---
-st.sidebar.title("Previously Crawled")
+st.sidebar.title("Crawled Apps")
 packages = list_packages(DB_PATH)
 if packages:
     for pkg in packages:
         n = count_reviews(pkg, DB_PATH)
-        if st.sidebar.button(f"{pkg} ({n} reviews)", key=f"sidebar_{pkg}"):
+        if st.sidebar.button(f"{pkg}  ({n} reviews)", key=f"sidebar_{pkg}"):
             st.session_state.current_package_id = pkg
             st.session_state.current_df = get_reviews(pkg, DB_PATH)
 else:
     st.sidebar.info("No apps crawled yet.")
 
 # --- Main panel ---
-st.title("Google Play Review Crawler")
-st.caption("Enter an app name, Google Play URL, or package ID to crawl reviews.")
+st.markdown(BRAND_HEADER_HTML, unsafe_allow_html=True)
+st.title("Play Store Review Crawler")
+st.caption("Enter an app name, Google Play URL, or package ID to fetch reviews.")
 
 col1, col2, col3 = st.columns([4, 1, 1])
 with col1:
@@ -65,7 +71,7 @@ with col3:
         help="Per language when 'All languages' is selected",
     )
 
-crawl_btn = st.button("🔍 Crawl Reviews", type="primary", disabled=not user_input)
+crawl_btn = st.button("Search Reviews", type="primary", disabled=not user_input)
 
 # --- Crawl action ---
 if crawl_btn and user_input:
@@ -107,14 +113,14 @@ if crawl_btn and user_input:
 
         if len(raw) == 0:
             st.warning(
-                f"⚠️ No reviews found for **{pkg_id}**. "
+                f"No reviews found for **{pkg_id}**. "
                 "The app may be new, have no public reviews yet, or not available in this language."
             )
         else:
             st.success(
-                f"✅ Crawled **{len(raw)}** reviews | "
-                f"New: **{inserted}** | "
-                f"Total stored: **{total_stored}**"
+                f"Fetched **{len(raw)}** reviews — "
+                f"**{inserted}** new added — "
+                f"**{total_stored}** total stored"
             )
             st.rerun()
 
@@ -162,7 +168,7 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
     with col_csv:
         csv = filtered.to_csv(index=False)
         st.download_button(
-            "⬇️ Export CSV",
+            "Download CSV",
             data=csv,
             file_name=f"{pkg}-reviews.csv",
             mime="text/csv",
@@ -170,8 +176,11 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
     with col_json:
         json_str = filtered.to_json(orient="records", force_ascii=False, indent=2)
         st.download_button(
-            "⬇️ Export JSON",
+            "Download JSON",
             data=json_str,
             file_name=f"{pkg}-reviews.json",
             mime="application/json",
         )
+
+# --- Footer (always visible) ---
+st.markdown(FOOTER_HTML, unsafe_allow_html=True)
