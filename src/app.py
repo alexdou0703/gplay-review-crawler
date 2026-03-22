@@ -140,7 +140,11 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
     pkg = st.session_state.get("current_package_id", "")
 
     st.divider()
-    st.subheader(f"Reviews — {pkg} ({len(df)} total)")
+
+    # Header row: title left, export buttons right
+    hcol_title, hcol_csv, hcol_json = st.columns([6, 1, 1])
+    with hcol_title:
+        st.subheader(f"Reviews — {pkg} ({len(df)} total)")
 
     # Star filter
     selected_stars = st.multiselect(
@@ -150,6 +154,24 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
         format_func=lambda x: "⭐" * x,
     )
     filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
+
+    # Export buttons — top-right, always visible before table
+    csv = filtered.to_csv(index=False)
+    json_str = filtered.to_json(orient="records", force_ascii=False, indent=2)
+    with hcol_csv:
+        st.download_button(
+            "Download CSV",
+            data=csv,
+            file_name=f"{pkg}-reviews.csv",
+            mime="text/csv",
+        )
+    with hcol_json:
+        st.download_button(
+            "Download JSON",
+            data=json_str,
+            file_name=f"{pkg}-reviews.json",
+            mime="application/json",
+        )
 
     # Display table
     display_cols = ["username", "score", "content", "thumbs_up", "review_created_at", "reply_content"]
@@ -165,27 +187,7 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
         use_container_width=True,
         height=500,
     )
-
     st.caption(f"Showing {len(filtered)} of {len(df)} reviews")
-
-    # Export
-    col_csv, col_json = st.columns(2)
-    with col_csv:
-        csv = filtered.to_csv(index=False)
-        st.download_button(
-            "Download CSV",
-            data=csv,
-            file_name=f"{pkg}-reviews.csv",
-            mime="text/csv",
-        )
-    with col_json:
-        json_str = filtered.to_json(orient="records", force_ascii=False, indent=2)
-        st.download_button(
-            "Download JSON",
-            data=json_str,
-            file_name=f"{pkg}-reviews.json",
-            mime="application/json",
-        )
 
 # --- Footer (always visible) ---
 st.markdown(FOOTER_HTML, unsafe_allow_html=True)
