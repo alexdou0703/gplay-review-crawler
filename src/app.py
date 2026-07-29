@@ -101,6 +101,10 @@ with col3:
     )
 
 crawl_btn = st.button("Search Reviews", type="primary", disabled=not user_input)
+st.caption(
+    "Full-history crawls can take hours — run them headless with "
+    "`python src/crawl_cli.py <app> --full` (resumable; see README) and use this page to browse results."
+)
 
 # --- Crawl action ---
 if crawl_btn and user_input:

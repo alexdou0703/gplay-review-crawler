@@ -60,6 +60,8 @@ def init_db(db_path: str) -> None:
     """Create tables if they don't exist and migrate older databases."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
+        # WAL lets the Streamlit viewer read while a CLI crawl writes.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
         _migrate(conn)
 
