@@ -1,2 +1,12 @@
 [server]
 runOnSave = true
+
+# Light base theme in brand colors. Without this Streamlit falls back to the
+# viewer's OS preference — dark base under the light brand CSS made captions,
+# radios, metrics, dataframes and chart canvases illegible.
+[theme]
+base = "light"
+primaryColor = "#7C3AED"
+backgroundColor = "#F5F3FF"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1E1B4B"

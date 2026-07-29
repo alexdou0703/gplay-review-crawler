@@ -23,37 +23,43 @@ def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
         "Review **language** is used as the market proxy — Google Play does not "
         "expose a reviewer's real country. Crawl more languages for wider market coverage."
     )
-    freq_label = st.radio("Granularity", list(_FREQ_LABELS), index=0, horizontal=True)
+    # Monthly default: multi-year datasets are noise at weekly granularity
+    freq_label = st.radio("Granularity", list(_FREQ_LABELS), index=1, horizontal=True)
     freq = _FREQ_LABELS[freq_label]
 
     # --- Volume + rating over time, spikes flagged ---
     st.subheader("Review volume & rating over time")
+    st.caption(
+        "🟦 light bars = review volume · 🟥 red bars = volume spike (≥2× rolling baseline) · "
+        "➖ purple line = average rating"
+    )
     vol = detect_spikes(volume_rating_by_period(df, freq))
     base = alt.Chart(vol).encode(x=alt.X("period:T", title=None))
-    bars = base.mark_bar(opacity=0.35).encode(
-        y=alt.Y("n:Q", title="reviews"),
-        color=alt.condition(alt.datum.is_spike, alt.value("#d62728"), alt.value("#4c78a8")),
+    bars = base.mark_bar(opacity=0.7).encode(
+        y=alt.Y("n:Q", title="reviews / period"),
+        color=alt.condition(alt.datum.is_spike, alt.value("#DC2626"), alt.value("#A5B4FC")),
         tooltip=["period:T", "n:Q", alt.Tooltip("avg_score:Q", format=".2f"), "tone:N"],
     )
-    line = base.mark_line(color="#e45756", strokeWidth=2).encode(
-        y=alt.Y("avg_score:Q", title="avg ⭐", scale=alt.Scale(domain=[1, 5])),
+    line = base.mark_line(color="#7C3AED", strokeWidth=2.5).encode(
+        y=alt.Y("avg_score:Q", title="avg rating", scale=alt.Scale(domain=[1, 5])),
     )
     st.altair_chart(
         alt.layer(bars, line).resolve_scale(y="independent").properties(height=280),
         use_container_width=True,
     )
-    st.caption("Red bars = volume spike vs recent baseline (≥2× rolling median).")
 
     # --- Spike explanations: the campaign/backlash view ---
     spikes = spike_details(df, vol, freq)
     if spikes:
-        st.subheader(f"Spike windows ({len(spikes)})")
-        tone_icon = {"positive": "📈", "negative": "🔥", "mixed": "❓"}
-        for s in reversed(spikes[-10:]):
+        shown = min(10, len(spikes))
+        st.subheader(f"Spike windows — latest {shown} of {len(spikes)}")
+        # Word badges so the collapsed list is scannable without expanding
+        tone_badge = {"positive": "📈 Campaign?", "negative": "🔥 Backlash?", "mixed": "❓ Organic/mixed"}
+        for s in reversed(spikes[-shown:]):
             label = (
-                f"{tone_icon.get(s['tone'], '')} {s['period']:%Y-%m-%d} — "
-                f"{s['n']} reviews ({s['n'] / max(s['baseline'], 1):.1f}× baseline), "
-                f"avg {s['avg_score']:.2f}⭐"
+                f"{tone_badge.get(s['tone'], s['tone'])} · {s['period']:%Y-%m-%d} — "
+                f"{s['n']:,} reviews ({s['n'] / max(s['baseline'], 1):.1f}× baseline), "
+                f"avg {s['avg_score']:.2f}"
             )
             with st.expander(label):
                 verdict = {
@@ -63,12 +69,18 @@ def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
                 }[s["tone"]]
                 st.write(verdict)
                 cols = st.columns(3)
-                cols[0].write("**Markets (lang)**")
-                cols[0].write({k: int(v) for k, v in s["langs"].items()})
-                cols[1].write("**Versions first seen**")
-                cols[1].write(", ".join(s["new_versions"]) or "—")
-                cols[2].write("**Top phrases**")
-                cols[2].write(", ".join(p for p, _ in s["bigrams"][:6]) or "—")
+                cols[0].markdown(
+                    "**Markets (lang)**\n\n"
+                    + ("\n".join(f"- {k} — {int(v):,}" for k, v in s["langs"].items()) or "—")
+                )
+                cols[1].markdown(
+                    "**Versions first seen**\n\n"
+                    + ("\n".join(f"- {v}" for v in s["new_versions"]) or "—")
+                )
+                cols[2].markdown(
+                    "**Top phrases**\n\n"
+                    + ("\n".join(f"- {p}" for p, _ in s["bigrams"][:6]) or "—")
+                )
 
     # --- Market mix over time ---
     st.subheader("Market mix over time (language share)")

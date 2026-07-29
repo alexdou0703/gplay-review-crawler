@@ -111,7 +111,7 @@ with col3:
         help="Per language when 'All languages' is selected",
     )
 
-crawl_btn = st.button("Search Reviews", type="primary", disabled=not user_input)
+crawl_btn = st.button("Crawl Reviews", type="primary", disabled=not user_input)
 st.caption(
     "Full-history crawls can take hours — run them headless with "
     "`python src/crawl_cli.py <app> --full` (resumable; see README) and use this page to browse results."
@@ -248,13 +248,19 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
 
     st.divider()
 
-    tab_reviews, tab_analysis = st.tabs(["📋 Reviews", "📈 Analysis"])
+    # Current-app strip: immediate feedback on which dataset is active
+    app_name = dict(pkg_entries).get(pkg, pkg) if pkg_entries else pkg
+    last_crawl = str(df["crawled_at"].max())[:10] if "crawled_at" in df.columns else ""
+    st.markdown(f"### {app_name}")
+    st.caption(f"`{pkg}` · {len(df):,} reviews · last crawl {last_crawl}")
+
+    tab_reviews, tab_analysis = st.tabs(["Reviews", "Analysis"])
 
     with tab_reviews:
         # Header row: title left, export buttons right
         hcol_title, hcol_csv, hcol_json = st.columns([6, 1, 1])
         with hcol_title:
-            st.subheader(f"Reviews — {pkg} ({len(df)} total)")
+            st.subheader(f"Reviews — {len(df):,} total")
 
         # Rating filter — 5 checkboxes always visible with counts per rating
         rating_counts = df["score"].value_counts()
@@ -264,9 +270,20 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
         for col, star in zip([rc1, rc2, rc3, rc4, rc5], [5, 4, 3, 2, 1]):
             cnt = int(rating_counts.get(star, 0))
             with col:
-                if st.checkbox(f"{'⭐' * star}  {cnt}", value=True, key=f"star_filter_{star}"):
+                if st.checkbox(f"{'⭐' * star}  {cnt:,}", value=True, key=f"star_filter_{star}"):
                     selected_stars.append(star)
         filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
+
+        # Keyword mining without a CSV round-trip ("ads", "crash", "quảng cáo"...)
+        search_q = st.text_input(
+            "Search in reviews",
+            placeholder="e.g. quảng cáo, crash, ads — plain text, not regex",
+            key="review_search",
+        ).strip()
+        if search_q:
+            filtered = filtered[
+                filtered["content"].str.contains(search_q, case=False, na=False, regex=False)
+            ]
 
         # Export buttons — top-right, always visible before table.
         # Cached so every checkbox click doesn't re-serialize the whole dataset;
@@ -276,7 +293,9 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
             return _df.to_csv(index=False), _df.to_json(orient="records", force_ascii=False, indent=2)
 
         latest_crawl = str(filtered["crawled_at"].max()) if not filtered.empty else ""
-        csv, json_str = build_exports(pkg, tuple(sorted(selected_stars)), len(filtered), latest_crawl, filtered)
+        csv, json_str = build_exports(
+            pkg, (tuple(sorted(selected_stars)), search_q), len(filtered), latest_crawl, filtered
+        )
         with hcol_csv:
             st.download_button(
                 "Download CSV",
@@ -292,10 +311,12 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
                 mime="application/json",
             )
 
-        # Display table
+        # Display table — dates trimmed to day precision (timestamps eat width)
         display_cols = ["username", "score", "content", "thumbs_up", "review_created_at", "reply_content"]
+        display_df = filtered[display_cols].copy()
+        display_df["review_created_at"] = display_df["review_created_at"].str.slice(0, 10)
         st.dataframe(
-            filtered[display_cols].rename(columns={
+            display_df.rename(columns={
                 "username": "User",
                 "score": "Rating",
                 "content": "Review",
@@ -303,10 +324,15 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
                 "review_created_at": "Date",
                 "reply_content": "Dev Reply",
             }),
+            column_config={
+                "Rating": st.column_config.NumberColumn(format="%d ⭐", width="small"),
+                "Review": st.column_config.TextColumn(width="large"),
+                "Date": st.column_config.TextColumn(width="small"),
+            },
             use_container_width=True,
             height=500,
         )
-        st.caption(f"Showing {len(filtered)} of {len(df)} reviews")
+        st.caption(f"Showing {len(filtered):,} of {len(df):,} reviews")
 
     with tab_analysis:
         render_analysis_tab(df, pkg)

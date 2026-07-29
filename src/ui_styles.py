@@ -15,11 +15,24 @@ html, body, [class*="css"] {
     background: #F5F3FF;
 }
 
-/* Hide Streamlit chrome — toolbar, header, footer */
-#MainMenu, footer, header { visibility: hidden; }
+/* Hide Streamlit chrome — toolbar, menu, decoration — but keep the header
+   itself: it hosts the sidebar expand control, without which a collapsed
+   sidebar (mobile/split-screen auto-collapse) can never be reopened. */
+#MainMenu, footer { visibility: hidden; }
 [data-testid="stToolbar"] { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
-[data-testid="stHeader"] { display: none !important; }
+[data-testid="stHeader"] {
+    background: transparent !important;
+    height: 2.5rem !important;
+    /* fixed header must not swallow clicks on content underneath */
+    pointer-events: none !important;
+}
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stExpandSidebarButton"] {
+    display: flex !important;
+    color: #1E1B4B !important;
+    pointer-events: auto !important;
+}
 
 /* Content container — remove top gap left by hidden header */
 .block-container {
@@ -75,7 +88,7 @@ h2, h3 {
     font-weight: 600 !important;
     letter-spacing: -0.01em !important;
 }
-.stCaption p {
+[data-testid="stCaptionContainer"] p {
     color: #6B7280 !important;
     font-size: 0.9rem !important;
 }
@@ -203,6 +216,7 @@ h2, h3 {
     font-weight: 500 !important;
     font-size: 0.875rem !important;
     cursor: pointer !important;
+    white-space: nowrap !important;  /* keep count on the same line as the stars */
 }
 
 /* ── Custom brand alert boxes ───────────────────────────────────────────────── */
