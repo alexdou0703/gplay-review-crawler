@@ -1,6 +1,6 @@
 ---
 title: "UI/UX quick wins from design review"
-status: in-progress
+status: completed
 created: 2026-07-30
 source: plans/reports/ui-ux-review-260729-2342-streamlit-analysis-app-report.md
 ---

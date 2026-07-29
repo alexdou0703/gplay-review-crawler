@@ -109,19 +109,31 @@ with col2:
     # "All languages" crawls ALL_LANGUAGES sequentially (~200 reviews each)
     lang_options = ["All languages"] + ALL_LANGUAGES
     lang = st.selectbox("Language", lang_options, index=0)
+FULL_HISTORY = "All (full history)"
 with col3:
-    count = st.selectbox(
+    count_choice = st.selectbox(
         "Max reviews",
-        [100, 200, 500, 1000],
+        [100, 200, 500, 1000, FULL_HISTORY],
         index=1,
-        help="Per language when 'All languages' is selected",
+        help="Per language when 'All languages' is selected. "
+             f"'{FULL_HISTORY}' walks the complete history — big apps take hours; "
+             "progress is checkpointed per page, so interruptions resume.",
     )
+    # None = no cap: crawl_reviews_iter walks until Google has no more pages
+    count = None if count_choice == FULL_HISTORY else count_choice
 
 crawl_btn = st.button("Crawl Reviews", type="primary", disabled=not user_input)
-st.caption(
-    "Full-history crawls can take hours — run them headless with "
-    "`python src/crawl_cli.py <app> --full` (resumable; see README) and use this page to browse results."
-)
+if count is None:
+    st.caption(
+        "⏳ Full history in the browser keeps this tab busy for hours on big apps — "
+        "every page is saved immediately and an interrupted crawl resumes from its checkpoint. "
+        "For unattended runs prefer `python src/crawl_cli.py <app> --full`."
+    )
+else:
+    st.caption(
+        "Full-history crawls can take hours — pick 'All (full history)' here (resumable), or run "
+        "headless with `python src/crawl_cli.py <app> --full` and use this page to browse results."
+    )
 
 # --- Crawl action ---
 if crawl_btn and user_input:
@@ -137,7 +149,8 @@ if crawl_btn and user_input:
         effective_country = detected_country or "us"
         app_title = fetch_app_name(pkg_id, country=effective_country)
         save_app_name(pkg_id, app_title, DB_PATH)
-        st.markdown(info_box(f"<strong>{app_title}</strong> <code>{pkg_id}</code> — crawling up to {count} reviews..."), unsafe_allow_html=True)
+        scope_txt = "full history" if count is None else f"up to {count:,} reviews"
+        st.markdown(info_box(f"<strong>{app_title}</strong> <code>{pkg_id}</code> — crawling {scope_txt}..."), unsafe_allow_html=True)
 
         # Every page is saved with its crawl checkpoint as it arrives, so an
         # interrupted crawl keeps everything fetched so far and resumes from
