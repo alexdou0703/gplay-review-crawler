@@ -1,7 +1,17 @@
 """Parse user input (URL, package ID, or app name) into a Google Play package ID."""
 
+import re
 from urllib.parse import urlparse, parse_qs
 from google_play_scraper import search
+
+
+def _norm_title(s: str) -> str:
+    """Normalize for title comparison: lowercase, alphanumeric only.
+
+    Users type "blockblast" for "Block Blast!" — spacing and punctuation must
+    not decide between the real app and a similarly-named clone.
+    """
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
 def parse_url(user_input: str) -> tuple[str, str | None]:
@@ -45,10 +55,15 @@ def parse_package_id(user_input: str) -> str:
     # Workaround: prefer exact title match among valid results; warn if best match is ambiguous.
     results = search(user_input, n_hits=10, lang="en", country="us")
 
-    # Detect case where exact match exists but has appId=None (library parsing bug)
-    query_lower = user_input.lower()
+    # Titles are compared normalized (case/spacing/punctuation-insensitive) so
+    # "blockblast" matches "Block Blast!" instead of falling through to a clone.
+    query_norm = _norm_title(user_input)
+
+    # Detect case where the intended match exists but has appId=None (library
+    # parsing bug for featured placements) — silently picking the next result
+    # would crawl a lookalike app.
     for r in results:
-        if r.get("title", "").lower() == query_lower and not r.get("appId"):
+        if _norm_title(r.get("title", "")) == query_norm and not r.get("appId"):
             raise ValueError(
                 f"Found '{r['title']}' but could not extract package ID (library limitation). "
                 f"Please use the Google Play URL or package ID directly."
@@ -62,11 +77,11 @@ def parse_package_id(user_input: str) -> str:
         )
 
     # Prefer exact title match first, then substring match, then first result
-    exact = [r for r in valid if r.get("title", "").lower() == query_lower]
+    exact = [r for r in valid if _norm_title(r.get("title", "")) == query_norm]
     if exact:
         return exact[0]["appId"]
 
-    partial = [r for r in valid if query_lower in r.get("title", "").lower()]
+    partial = [r for r in valid if query_norm in _norm_title(r.get("title", ""))]
     if partial:
         return partial[0]["appId"]
 
