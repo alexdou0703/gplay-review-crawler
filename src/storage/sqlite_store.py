@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS reviews (
     review_created_at  TEXT,
     reply_content      TEXT,
     reply_at           TEXT,
-    crawled_at         TEXT
+    crawled_at         TEXT,
+    app_version        TEXT,
+    lang               TEXT,
+    country            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_package_id ON reviews(package_id);
 CREATE TABLE IF NOT EXISTS apps (
@@ -27,17 +30,35 @@ CREATE TABLE IF NOT EXISTS apps (
 );
 """
 
+# Columns added after the initial release; ALTER'd in on databases
+# created before they existed.
+_MIGRATED_COLUMNS = ["app_version", "lang", "country"]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add missing columns to reviews on databases created with an older schema."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(reviews)")}
+    for col in _MIGRATED_COLUMNS:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE reviews ADD COLUMN {col} TEXT")
+
 
 def init_db(db_path: str) -> None:
-    """Create reviews table and index if they don't exist."""
+    """Create tables if they don't exist and migrate older databases."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 def save_reviews(reviews: list[dict], package_id: str, db_path: str) -> int:
     """
-    Insert reviews into DB. Skips duplicates (INSERT OR IGNORE by review_id).
+    Upsert reviews into DB, keyed by review_id.
+
+    Existing rows get refreshed mutable fields (content, score, thumbs_up,
+    dev reply, crawled_at). `lang`/`country` keep their first-seen values:
+    cross-language dedup means the same review can arrive again under a
+    different query language, which must not clobber its origin market.
     Returns number of newly inserted rows.
     """
     crawled_at = datetime.now(timezone.utc).isoformat()
@@ -55,27 +76,43 @@ def save_reviews(reviews: list[dict], package_id: str, db_path: str) -> int:
             r.get("replyContent", ""),
             str(r.get("repliedAt", "")) if r.get("repliedAt") else None,
             crawled_at,
+            r.get("reviewCreatedVersion"),
+            r.get("lang"),
+            r.get("country"),
         )
         for r in reviews
         if r.get("reviewId")  # skip rows without an ID
     ]
 
     sql = """
-        INSERT OR IGNORE INTO reviews
+        INSERT INTO reviews
             (review_id, package_id, username, user_image, content, score,
-             thumbs_up, review_created_at, reply_content, reply_at, crawled_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             thumbs_up, review_created_at, reply_content, reply_at, crawled_at,
+             app_version, lang, country)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(review_id) DO UPDATE SET
+            content       = excluded.content,
+            score         = excluded.score,
+            thumbs_up     = excluded.thumbs_up,
+            reply_content = excluded.reply_content,
+            reply_at      = excluded.reply_at,
+            crawled_at    = excluded.crawled_at,
+            app_version   = COALESCE(excluded.app_version, app_version)
     """
+    count_sql = "SELECT COUNT(*) FROM reviews WHERE package_id = ?"
     with sqlite3.connect(db_path) as conn:
-        cursor = conn.executemany(sql, rows)
-        return cursor.rowcount
+        before = conn.execute(count_sql, (package_id,)).fetchone()[0]
+        conn.executemany(sql, rows)
+        after = conn.execute(count_sql, (package_id,)).fetchone()[0]
+        return after - before
 
 
 def get_reviews(package_id: str, db_path: str) -> pd.DataFrame:
     """Return all stored reviews for a package as a DataFrame."""
     sql = """
         SELECT review_id, username, score, content, thumbs_up,
-               review_created_at, reply_content, crawled_at
+               review_created_at, reply_content, crawled_at,
+               app_version, lang, country
         FROM reviews
         WHERE package_id = ?
         ORDER BY review_created_at DESC

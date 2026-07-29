@@ -2,6 +2,7 @@
 
 import sys
 import os
+from html import escape as html_escape
 
 # Ensure src/ is in path for local imports
 sys.path.insert(0, os.path.dirname(__file__))
@@ -10,9 +11,11 @@ import streamlit as st
 import pandas as pd
 
 from crawler.url_parser import parse_package_id, parse_url
-from crawler.gplay_crawler import crawl_reviews, crawl_reviews_all_languages, ALL_LANGUAGES, fetch_app_name
+from crawler.gplay_crawler import (
+    CrawlState, crawl_reviews_iter, crawl_reviews_all_languages, ALL_LANGUAGES, fetch_app_name,
+)
 from storage.sqlite_store import (
-    init_db, save_reviews, get_reviews, list_packages, count_reviews,
+    init_db, save_reviews, get_reviews, count_reviews,
     save_app_name, list_packages_with_names,
 )
 from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
@@ -91,6 +94,13 @@ if crawl_btn and user_input:
         save_app_name(pkg_id, app_title, DB_PATH)
         st.markdown(info_box(f"<strong>{app_title}</strong> <code>{pkg_id}</code> — crawling up to {count} reviews..."), unsafe_allow_html=True)
 
+        # Every batch is saved as it arrives, so an interrupted crawl keeps
+        # everything fetched so far (minus at most one batch).
+        inserted_counter = {"n": 0}
+
+        def save_batch(batch_lang, batch):
+            inserted_counter["n"] += save_reviews(batch, pkg_id, DB_PATH)
+
         if lang == "All languages":
             progress_bar = st.progress(0, text="Starting multi-language crawl...")
 
@@ -102,37 +112,68 @@ if crawl_btn and user_input:
                     text=f"[{idx}/{len(ALL_LANGUAGES)}] {l}: +{fetched} unique | total {total_so_far}",
                 )
 
-            raw = crawl_reviews_all_languages(
-                pkg_id, count_per_lang=count, country=effective_country, progress_callback=on_progress
+            raw, summary = crawl_reviews_all_languages(
+                pkg_id, count_per_lang=count, country=effective_country,
+                progress_callback=on_progress, on_batch=save_batch,
             )
             progress_bar.progress(1.0, text=f"Done — {len(raw)} unique reviews across {len(ALL_LANGUAGES)} languages")
         else:
+            state = CrawlState(pkg_id, lang, effective_country)
+            raw = []
             with st.spinner(f"Crawling reviews in [{lang}] (this may take a moment)..."):
-                raw = crawl_reviews(pkg_id, count=count, lang=lang, country=effective_country)
+                for batch in crawl_reviews_iter(
+                    pkg_id, count=count, lang=lang, country=effective_country, state=state
+                ):
+                    save_batch(lang, batch)
+                    raw.extend(batch)
+            summary = {lang: state}
 
-        inserted = save_reviews(raw, pkg_id, DB_PATH)
+        inserted = inserted_counter["n"]
         total_stored = count_reviews(pkg_id, DB_PATH)
 
         st.session_state.current_package_id = pkg_id
         st.session_state.current_df = get_reviews(pkg_id, DB_PATH)
 
-        if len(raw) == 0:
-            st.markdown(warning_box(
+        # Partial data must never be presented as success.
+        problems = {l: s for l, s in summary.items() if s.status in ("throttled", "error")}
+        counts_html = (
+            f"Fetched <strong>{len(raw)}</strong> reviews — "
+            f"<strong>{inserted}</strong> new added — "
+            f"<strong>{total_stored}</strong> total stored"
+        )
+        if problems:
+            detail = ", ".join(
+                f"{l}: {s.status}" + (f" ({html_escape(s.error_msg)})" if s.error_msg else "")
+                for l, s in problems.items()
+            )
+            msg = (
+                "warning",
+                f"{counts_html}<br><strong>Partial results</strong> — Google rate-limited or "
+                f"errored on: {detail}. Run the same crawl again later to fetch the rest.",
+            )
+        elif len(raw) == 0:
+            msg = (
+                "warning",
                 f"No reviews found for <strong>{pkg_id}</strong>. "
-                "The app may be new, have no public reviews yet, or not available in this language."
-            ), unsafe_allow_html=True)
+                "The app may be new, have no public reviews yet, or not available in this language.",
+            )
         else:
-            st.markdown(success_box(
-                f"Fetched <strong>{len(raw)}</strong> reviews — "
-                f"<strong>{inserted}</strong> new added — "
-                f"<strong>{total_stored}</strong> total stored"
-            ), unsafe_allow_html=True)
-            st.rerun()
+            msg = ("success", counts_html)
+
+        # Stash the outcome so it survives st.rerun() (rendered below).
+        st.session_state.last_crawl_summary = msg
+        st.rerun()
 
     except ValueError as e:
         st.markdown(error_box(f"Could not resolve app: {e}"), unsafe_allow_html=True)
     except Exception as e:
         st.markdown(error_box(f"Crawl failed: {e}"), unsafe_allow_html=True)
+
+# Outcome of the previous crawl run (stashed before st.rerun above)
+if "last_crawl_summary" in st.session_state:
+    kind, html = st.session_state.pop("last_crawl_summary")
+    render_box = {"success": success_box, "warning": warning_box, "error": error_box}[kind]
+    st.markdown(render_box(html), unsafe_allow_html=True)
 
 # --- Results ---
 if "current_df" in st.session_state and not st.session_state.current_df.empty:
