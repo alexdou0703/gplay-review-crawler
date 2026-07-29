@@ -182,6 +182,29 @@ def load_crawl_state(package_id: str, lang: str, country: str, db_path: str):
     return state
 
 
+def count_known_review_ids(review_ids: list[str], db_path: str) -> int:
+    """Return how many of the given review IDs already exist in the DB.
+
+    Chunked to stay under SQLite's bound-variable limit.
+    """
+    total = 0
+    with sqlite3.connect(db_path) as conn:
+        for i in range(0, len(review_ids), 500):
+            chunk = review_ids[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            total += conn.execute(
+                f"SELECT COUNT(*) FROM reviews WHERE review_id IN ({placeholders})", chunk
+            ).fetchone()[0]
+    return total
+
+
+def list_stored_langs(package_id: str, db_path: str) -> list[str]:
+    """Return distinct languages stored for a package (sync targets)."""
+    sql = "SELECT DISTINCT lang FROM reviews WHERE package_id = ? AND lang IS NOT NULL"
+    with sqlite3.connect(db_path) as conn:
+        return [r[0] for r in conn.execute(sql, (package_id,)).fetchall()]
+
+
 def get_reviews(package_id: str, db_path: str) -> pd.DataFrame:
     """Return all stored reviews for a package as a DataFrame."""
     sql = """

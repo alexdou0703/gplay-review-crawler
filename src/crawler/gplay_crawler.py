@@ -174,6 +174,45 @@ def crawl_reviews_iter(
     state.status = "complete"
 
 
+def sync_reviews_iter(
+    package_id: str,
+    lang: str = "en",
+    country: str = "us",
+    known_count_fn=None,
+    delay: float = 1.0,
+    state: CrawlState | None = None,
+):
+    """
+    Yield newest-first pages until the dataset is caught up.
+
+    known_count_fn(review_ids) reports how many of a page's IDs are already
+    stored; after 2 consecutive fully-known pages the sync stops (one page
+    could be fully known by coincidence of NEWEST-sort reordering — e.g. an
+    edited review resurfacing — two in a row means the known region started).
+    Known pages are still yielded so upserts refresh engagement and replies.
+
+    Always starts from the newest reviews (state.cursor is ignored/reset) —
+    resuming a deep-history checkpoint is the full crawl's job, not sync's.
+    On an empty database this walks the full history.
+    """
+    if state is None:
+        state = CrawlState(package_id, lang, country)
+    state.cursor = None  # sync never continues a deep-history checkpoint
+
+    consecutive_known = 0
+    for page in crawl_reviews_iter(
+        package_id, count=None, lang=lang, country=country, delay=delay, state=state
+    ):
+        known = known_count_fn([r.get("reviewId", "") for r in page]) if known_count_fn else 0
+        consecutive_known = consecutive_known + 1 if known == len(page) else 0
+
+        yield page
+
+        if consecutive_known >= 2:
+            state.status = "complete"
+            return
+
+
 def resume_or_fresh(prior, package_id: str, lang: str, country: str) -> CrawlState:
     """Reuse a stored crawl state when it holds a resumable checkpoint.
 

@@ -19,6 +19,7 @@ from storage.sqlite_store import (
     init_db, get_reviews, count_reviews, save_app_name, list_packages_with_names,
     save_reviews_and_state, save_crawl_state, load_crawl_state,
 )
+from crawl_service import sync_package
 from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
 
 # --- Config ---
@@ -49,9 +50,30 @@ pkg_entries = list_packages_with_names(DB_PATH)
 if pkg_entries:
     for pkg, app_name in pkg_entries:
         n = count_reviews(pkg, DB_PATH)
-        if st.sidebar.button(f"{app_name}  ({n})", key=f"sidebar_{pkg}"):
-            st.session_state.current_package_id = pkg
-            st.session_state.current_df = get_reviews(pkg, DB_PATH)
+        col_open, col_sync = st.sidebar.columns([4, 1])
+        with col_open:
+            if st.button(f"{app_name}  ({n})", key=f"sidebar_{pkg}"):
+                st.session_state.current_package_id = pkg
+                st.session_state.current_df = get_reviews(pkg, DB_PATH)
+        with col_sync:
+            if st.button("↻", key=f"sync_{pkg}", help="Fetch reviews posted since the last crawl"):
+                with st.spinner(f"Syncing {app_name}..."):
+                    results = sync_package(pkg, DB_PATH)
+                total_new = sum(new for new, _ in results.values())
+                throttled = [l for l, (_, s) in results.items() if s.status == "throttled"]
+                if throttled:
+                    st.session_state.last_crawl_summary = (
+                        "warning",
+                        f"Synced <strong>{app_name}</strong>: +{total_new} new — "
+                        f"partial, rate-limited on: {', '.join(throttled)}. Try again later.",
+                    )
+                else:
+                    st.session_state.last_crawl_summary = (
+                        "success", f"Synced <strong>{app_name}</strong>: +{total_new} new reviews"
+                    )
+                st.session_state.current_package_id = pkg
+                st.session_state.current_df = get_reviews(pkg, DB_PATH)
+                st.rerun()
 else:
     st.sidebar.info("No apps crawled yet.")
 
