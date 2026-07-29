@@ -7,7 +7,7 @@ Crawl the review history of any Google Play app into SQLite for product analysis
 - Input by Google Play URL, package ID, or app name (store country picked up from the URL's `gl` param)
 - **Full-history crawls** with per-page checkpoints — interruptions and rate limits resume where they stopped, and partial results are always reported as partial, never as success
 - 22-language sweep deduplicated by review ID; each review stores its `lang`, `country`, and the `app_version` it was written on
-- **Incremental sync**: refresh an existing dataset in seconds (↻ button in the sidebar, or `--sync` in the CLI) — re-fetched reviews also update thumbs-up counts and developer replies
+- **Incremental sync**: fetch only reviews newer than the stored dataset (↻ button in the sidebar, or `--sync` in the CLI) — re-fetched reviews also update thumbs-up counts and developer replies. Fast when the dataset is reasonably complete; the sidebar button is budget-capped (~5000 reviews/language per click) so shallow datasets can't turn a refresh into an hours-long walk — use the CLI for unbounded catch-up
 - Star-rating filter, CSV / JSON export
 - Headless CLI for multi-hour crawls; the Streamlit UI reads the same database live
 
@@ -36,7 +36,7 @@ python src/crawl_cli.py com.roblox.client --sync
 nohup python src/crawl_cli.py com.example.app --full > crawl.log 2>&1 &
 ```
 
-Interrupted or rate-limited? Re-run the same command — progress is checkpointed per page. Exit codes: `0` complete, `2` partial (re-run later to resume), `130` interrupted.
+Interrupted or rate-limited? Re-run the same command — progress is checkpointed per page. If a checkpoint has expired on Google's side (crawl keeps ending `throttled` immediately), `--fresh` discards checkpoints and restarts from newest. Exit codes: `0` complete, `2` partial (re-run later to resume), `130` interrupted.
 
 ## Storage
 

@@ -50,6 +50,8 @@ class CrawlState:
       complete    — reached end of available reviews (or the requested cap)
       throttled   — page fetches kept failing or returning empty despite a
                     live cursor; data is PARTIAL, resume from `cursor` later
+      partial     — sync stopped at its page budget before reaching the known
+                    region; dataset is fresher but not caught up
       error       — crawl aborted on an exception (see error_msg)
 
     `cursor` is Google's pagination cursor (plain string), kept at the last
@@ -188,6 +190,7 @@ def sync_reviews_iter(
     known_count_fn=None,
     delay: float = 1.0,
     state: CrawlState | None = None,
+    max_pages: int | None = None,
 ):
     """
     Yield newest-first pages until the dataset is caught up.
@@ -198,25 +201,39 @@ def sync_reviews_iter(
     edited review resurfacing — two in a row means the known region started).
     Known pages are still yielded so upserts refresh engagement and replies.
 
+    max_pages bounds the walk: a dataset holding fewer than ~2 pages of
+    contiguous newest reviews can never satisfy the stop rule, so an unbounded
+    sync would degrade into a full-history crawl. Budget exhausted before the
+    known region → status `partial` (fresher, not caught up). None = unbounded
+    (CLI behavior; on an empty database that walks the full history).
+
     Always starts from the newest reviews (state.cursor is ignored/reset) —
     resuming a deep-history checkpoint is the full crawl's job, not sync's.
-    On an empty database this walks the full history.
     """
     if state is None:
         state = CrawlState(package_id, lang, country)
     state.cursor = None  # sync never continues a deep-history checkpoint
 
     consecutive_known = 0
+    pages_seen = 0
     for page in crawl_reviews_iter(
         package_id, count=None, lang=lang, country=country, delay=delay, state=state
     ):
         known = known_count_fn([r.get("reviewId", "") for r in page]) if known_count_fn else 0
         consecutive_known = consecutive_known + 1 if known == len(page) else 0
+        pages_seen += 1
 
         yield page
 
+        # Callers save each yielded page before the next fetch, so a pagination
+        # echo (Google occasionally repeats reviews across adjacent pages) can
+        # make a fresh page look fully known. Needing 2 such pages in a row
+        # makes a premature stop unlikely, and the next sync self-corrects.
         if consecutive_known >= 2:
             state.status = "complete"
+            return
+        if max_pages is not None and pages_seen >= max_pages:
+            state.status = "partial"
             return
 
 

@@ -58,14 +58,24 @@ if pkg_entries:
         with col_sync:
             if st.button("↻", key=f"sync_{pkg}", help="Fetch reviews posted since the last crawl"):
                 with st.spinner(f"Syncing {app_name}..."):
-                    results = sync_package(pkg, DB_PATH)
+                    # Page budget keeps a shallow dataset from turning this
+                    # click into a blocking full-history walk.
+                    results = sync_package(pkg, DB_PATH, max_pages=25)
                 total_new = sum(new for new, _ in results.values())
                 throttled = [l for l, (_, s) in results.items() if s.status == "throttled"]
-                if throttled:
+                partial = [l for l, (_, s) in results.items() if s.status == "partial"]
+                if throttled or partial:
+                    notes = []
+                    if throttled:
+                        notes.append(f"rate-limited on: {', '.join(throttled)} — try again later")
+                    if partial:
+                        notes.append(
+                            f"dataset too shallow to catch up on: {', '.join(partial)} — "
+                            "run <code>python src/crawl_cli.py … --sync</code> for an unbounded sync"
+                        )
                     st.session_state.last_crawl_summary = (
                         "warning",
-                        f"Synced <strong>{app_name}</strong>: +{total_new} new — "
-                        f"partial, rate-limited on: {', '.join(throttled)}. Try again later.",
+                        f"Synced <strong>{app_name}</strong>: +{total_new} new — partial; " + "; ".join(notes),
                     )
                 else:
                     st.session_state.last_crawl_summary = (
@@ -257,7 +267,7 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
     # Export buttons — top-right, always visible before table.
     # Cached so every checkbox click doesn't re-serialize the whole dataset;
     # keyed on filter + row count + latest crawl time, _df itself is not hashed.
-    @st.cache_data
+    @st.cache_data(max_entries=8)
     def build_exports(pkg_key, stars_key, row_count, latest_crawl, _df):
         return _df.to_csv(index=False), _df.to_json(orient="records", force_ascii=False, indent=2)
 

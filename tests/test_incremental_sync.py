@@ -30,10 +30,11 @@ def sleeps(monkeypatch):
     return recorded
 
 
-def test_count_known_review_ids_chunks_over_500(db):
+def test_count_known_review_ids_chunks_over_500_and_scopes_to_package(db):
     save_reviews(_page(3, "known"), "com.x", db)
     ids = [f"unknown{i}" for i in range(1100)] + ["known0", "known1", "known2"]
-    assert count_known_review_ids(ids, db) == 3
+    assert count_known_review_ids(ids, "com.x", db) == 3
+    assert count_known_review_ids(ids, "com.other", db) == 0  # package-scoped
 
 
 def test_sync_stops_after_two_consecutive_known_pages(monkeypatch, sleeps):
@@ -95,6 +96,37 @@ def test_sync_ignores_deep_history_checkpoint(monkeypatch, sleeps):
     list(gc.sync_reviews_iter("com.x", known_count_fn=lambda ids: 0, state=state))
 
     assert received_cursors == [None]  # starts from newest, not the checkpoint
+
+
+def test_sync_page_budget_stops_walk_with_partial_status(monkeypatch, sleeps):
+    def fake_fetch(package_id, lang, country, page_size, cursor):
+        return (_page(3, f"p{cursor}"), f"{cursor}x")  # endless NEW pages
+
+    monkeypatch.setattr(gc, "_fetch_page", fake_fetch)
+
+    state = gc.CrawlState("com.x", "en", "us")
+    pages = list(gc.sync_reviews_iter(
+        "com.x", known_count_fn=lambda ids: 0, state=state, max_pages=3
+    ))
+
+    assert len(pages) == 3  # budget respected — no unbounded history walk
+    assert state.status == "partial"
+
+
+def test_sync_package_uses_stored_country(monkeypatch, db, sleeps):
+    rows = [dict(r, country="vn") for r in _page(2, "old")]
+    save_reviews(rows, "com.x", db)
+
+    received = []
+
+    def fake_fetch(package_id, lang, country, page_size, cursor):
+        received.append(country)
+        return ([], None)
+
+    monkeypatch.setattr(gc, "_fetch_page", fake_fetch)
+    sync_package("com.x", db)
+
+    assert received == ["vn"]  # syncs under the dataset's country, not "us"
 
 
 def test_sync_package_saves_new_and_preserves_crawl_state(monkeypatch, db, sleeps):

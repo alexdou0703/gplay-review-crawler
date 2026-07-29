@@ -60,8 +60,10 @@ def init_db(db_path: str) -> None:
     """Create tables if they don't exist and migrate older databases."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
-        # WAL lets the Streamlit viewer read while a CLI crawl writes.
+        # WAL lets the Streamlit viewer read while a CLI crawl writes; the
+        # busy timeout makes a second writer wait instead of failing instantly.
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(SCHEMA)
         _migrate(conn)
 
@@ -184,10 +186,12 @@ def load_crawl_state(package_id: str, lang: str, country: str, db_path: str):
     return state
 
 
-def count_known_review_ids(review_ids: list[str], db_path: str) -> int:
-    """Return how many of the given review IDs already exist in the DB.
+def count_known_review_ids(review_ids: list[str], package_id: str, db_path: str) -> int:
+    """Return how many of the given review IDs already exist for this package.
 
-    Chunked to stay under SQLite's bound-variable limit.
+    Package-scoped so the invariant is local rather than relying on Google's
+    review IDs being globally unique. Chunked to stay under SQLite's
+    bound-variable limit.
     """
     total = 0
     with sqlite3.connect(db_path) as conn:
@@ -195,9 +199,22 @@ def count_known_review_ids(review_ids: list[str], db_path: str) -> int:
             chunk = review_ids[i:i + 500]
             placeholders = ",".join("?" * len(chunk))
             total += conn.execute(
-                f"SELECT COUNT(*) FROM reviews WHERE review_id IN ({placeholders})", chunk
+                f"SELECT COUNT(*) FROM reviews WHERE package_id = ? AND review_id IN ({placeholders})",
+                [package_id, *chunk],
             ).fetchone()[0]
     return total
+
+
+def get_stored_country(package_id: str, db_path: str) -> str | None:
+    """Return the dominant store country of a package's stored reviews."""
+    sql = """
+        SELECT country FROM reviews
+        WHERE package_id = ? AND country IS NOT NULL
+        GROUP BY country ORDER BY COUNT(*) DESC LIMIT 1
+    """
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(sql, (package_id,)).fetchone()
+    return row[0] if row else None
 
 
 def list_stored_langs(package_id: str, db_path: str) -> list[str]:

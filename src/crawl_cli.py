@@ -35,7 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("app", help="Google Play URL, package ID, or app name")
     p.add_argument("--langs", default="all",
-                   help="'all' or comma-separated codes, e.g. en,vi,ja (default: all)")
+                   help="'all' or comma-separated codes, e.g. en,vi,ja "
+                        "(default: all for crawls; languages already stored for --sync)")
     p.add_argument("--country", default=None,
                    help="Play Store country (default: gl param from URL, else us)")
     scope = p.add_mutually_exclusive_group()
@@ -45,13 +46,19 @@ def build_parser() -> argparse.ArgumentParser:
                        help="no cap — walk the complete review history per language")
     scope.add_argument("--sync", action="store_true",
                        help="incremental update: fetch only reviews newer than the stored dataset")
+    p.add_argument("--fresh", action="store_true",
+                   help="discard stored checkpoints and restart from newest "
+                        "(escape hatch for expired resume cursors)")
     p.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
     p.add_argument("--delay", type=float, default=1.0, help="seconds between page requests")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.max is not None and args.max <= 0:
+        parser.error("--max must be a positive number of reviews")
     logging.basicConfig(
         level=logging.INFO, stream=sys.stdout,
         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S",
@@ -73,10 +80,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.sync:
-            # Default sync scope = languages already stored; --langs overrides.
+            # Default sync scope = stored languages + stored country; --langs/--country override.
             sync_langs = langs if args.langs != "all" else None
             results = sync_package(
-                package_id, args.db, langs=sync_langs, country=country, delay=args.delay,
+                package_id, args.db, langs=sync_langs,
+                country=args.country or detected_country, delay=args.delay,
                 progress_callback=lambda lang, new, s: logger.info("[%s] +%d new (%s)", lang, new, s.status),
             )
             states = {lang: s for lang, (_, s) in results.items()}
@@ -86,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                 logger.info("capped at %d reviews/language — use --full for complete history", count)
             states = crawl_package(
                 package_id, args.db, langs, country=country, count=count, delay=args.delay,
+                fresh=args.fresh,
                 page_callback=lambda lang, s, ins: logger.info(
                     "[%s] +%d new (%d fetched, %s)", lang, ins, s.fetched, s.status
                 ),

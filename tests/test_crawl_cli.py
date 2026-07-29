@@ -37,6 +37,37 @@ def test_parser_rejects_conflicting_scopes():
         build_parser().parse_args(["com.x", "--sync", "--full"])
 
 
+def test_main_rejects_non_positive_max():
+    from crawl_cli import main
+    with pytest.raises(SystemExit):
+        main(["com.x", "--max", "0"])
+
+
+def test_crawl_package_fresh_discards_checkpoint(monkeypatch, tmp_path):
+    recorded = []
+    monkeypatch.setattr(gc.time, "sleep", recorded.append)
+    db = str(tmp_path / "fresh.db")
+    init_db(db)
+
+    from storage.sqlite_store import save_crawl_state
+    prior = gc.CrawlState("com.x", "en", "us")
+    prior.cursor = "expired-ckpt"
+    prior.status = "throttled"
+    save_crawl_state(prior, db)
+
+    received = []
+
+    def fake_fetch(package_id, lang, country, page_size, cursor):
+        received.append(cursor)
+        return (_page(1), None)
+
+    monkeypatch.setattr(gc, "_fetch_page", fake_fetch)
+    summary = crawl_package("com.x", db, ["en"], count=None, fresh=True)
+
+    assert received == [None]  # checkpoint ignored, restarted from newest
+    assert summary["en"].status == "complete"
+
+
 def test_init_db_enables_wal(tmp_path):
     db = str(tmp_path / "wal.db")
     init_db(db)
