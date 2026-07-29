@@ -20,6 +20,7 @@ from storage.sqlite_store import (
     save_reviews_and_state, save_crawl_state, load_crawl_state,
 )
 from crawl_service import sync_package
+from analysis_ui import render_analysis_tab
 from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
 
 # --- Config ---
@@ -247,62 +248,68 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
 
     st.divider()
 
-    # Header row: title left, export buttons right
-    hcol_title, hcol_csv, hcol_json = st.columns([6, 1, 1])
-    with hcol_title:
-        st.subheader(f"Reviews — {pkg} ({len(df)} total)")
+    tab_reviews, tab_analysis = st.tabs(["📋 Reviews", "📈 Analysis"])
 
-    # Rating filter — 5 checkboxes always visible with counts per rating
-    rating_counts = df["score"].value_counts()
-    st.markdown("<p style='font-size:0.875rem;font-weight:500;color:#374151;margin-bottom:0.25rem'>Show ratings</p>", unsafe_allow_html=True)
-    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-    selected_stars = []
-    for col, star in zip([rc1, rc2, rc3, rc4, rc5], [5, 4, 3, 2, 1]):
-        cnt = int(rating_counts.get(star, 0))
-        with col:
-            if st.checkbox(f"{'⭐' * star}  {cnt}", value=True, key=f"star_filter_{star}"):
-                selected_stars.append(star)
-    filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
+    with tab_reviews:
+        # Header row: title left, export buttons right
+        hcol_title, hcol_csv, hcol_json = st.columns([6, 1, 1])
+        with hcol_title:
+            st.subheader(f"Reviews — {pkg} ({len(df)} total)")
 
-    # Export buttons — top-right, always visible before table.
-    # Cached so every checkbox click doesn't re-serialize the whole dataset;
-    # keyed on filter + row count + latest crawl time, _df itself is not hashed.
-    @st.cache_data(max_entries=8)
-    def build_exports(pkg_key, stars_key, row_count, latest_crawl, _df):
-        return _df.to_csv(index=False), _df.to_json(orient="records", force_ascii=False, indent=2)
+        # Rating filter — 5 checkboxes always visible with counts per rating
+        rating_counts = df["score"].value_counts()
+        st.markdown("<p style='font-size:0.875rem;font-weight:500;color:#374151;margin-bottom:0.25rem'>Show ratings</p>", unsafe_allow_html=True)
+        rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+        selected_stars = []
+        for col, star in zip([rc1, rc2, rc3, rc4, rc5], [5, 4, 3, 2, 1]):
+            cnt = int(rating_counts.get(star, 0))
+            with col:
+                if st.checkbox(f"{'⭐' * star}  {cnt}", value=True, key=f"star_filter_{star}"):
+                    selected_stars.append(star)
+        filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
 
-    latest_crawl = str(filtered["crawled_at"].max()) if not filtered.empty else ""
-    csv, json_str = build_exports(pkg, tuple(sorted(selected_stars)), len(filtered), latest_crawl, filtered)
-    with hcol_csv:
-        st.download_button(
-            "Download CSV",
-            data=csv,
-            file_name=f"{pkg}-reviews.csv",
-            mime="text/csv",
+        # Export buttons — top-right, always visible before table.
+        # Cached so every checkbox click doesn't re-serialize the whole dataset;
+        # keyed on filter + row count + latest crawl time, _df itself is not hashed.
+        @st.cache_data(max_entries=8)
+        def build_exports(pkg_key, stars_key, row_count, latest_crawl, _df):
+            return _df.to_csv(index=False), _df.to_json(orient="records", force_ascii=False, indent=2)
+
+        latest_crawl = str(filtered["crawled_at"].max()) if not filtered.empty else ""
+        csv, json_str = build_exports(pkg, tuple(sorted(selected_stars)), len(filtered), latest_crawl, filtered)
+        with hcol_csv:
+            st.download_button(
+                "Download CSV",
+                data=csv,
+                file_name=f"{pkg}-reviews.csv",
+                mime="text/csv",
+            )
+        with hcol_json:
+            st.download_button(
+                "Download JSON",
+                data=json_str,
+                file_name=f"{pkg}-reviews.json",
+                mime="application/json",
+            )
+
+        # Display table
+        display_cols = ["username", "score", "content", "thumbs_up", "review_created_at", "reply_content"]
+        st.dataframe(
+            filtered[display_cols].rename(columns={
+                "username": "User",
+                "score": "Rating",
+                "content": "Review",
+                "thumbs_up": "👍",
+                "review_created_at": "Date",
+                "reply_content": "Dev Reply",
+            }),
+            use_container_width=True,
+            height=500,
         )
-    with hcol_json:
-        st.download_button(
-            "Download JSON",
-            data=json_str,
-            file_name=f"{pkg}-reviews.json",
-            mime="application/json",
-        )
+        st.caption(f"Showing {len(filtered)} of {len(df)} reviews")
 
-    # Display table
-    display_cols = ["username", "score", "content", "thumbs_up", "review_created_at", "reply_content"]
-    st.dataframe(
-        filtered[display_cols].rename(columns={
-            "username": "User",
-            "score": "Rating",
-            "content": "Review",
-            "thumbs_up": "👍",
-            "review_created_at": "Date",
-            "reply_content": "Dev Reply",
-        }),
-        use_container_width=True,
-        height=500,
-    )
-    st.caption(f"Showing {len(filtered)} of {len(df)} reviews")
+    with tab_analysis:
+        render_analysis_tab(df, pkg)
 
 # --- Footer (always visible) ---
 st.markdown(FOOTER_HTML, unsafe_allow_html=True)
