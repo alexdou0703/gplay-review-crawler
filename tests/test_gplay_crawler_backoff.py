@@ -111,7 +111,7 @@ def test_all_languages_dedups_and_reports_per_lang_status(monkeypatch, sleeps):
 
     saved = []
     merged, summary = gc.crawl_reviews_all_languages(
-        "com.x", count_per_lang=10, on_batch=lambda lang, b: saved.append((lang, len(b)))
+        "com.x", count_per_lang=10, on_batch=lambda lang, b, state: saved.append((lang, len(b)))
     )
 
     assert len(merged) == 3  # vi duplicates dropped
@@ -126,7 +126,7 @@ def test_on_batch_failure_propagates_as_fatal(monkeypatch, sleeps):
     monkeypatch.setattr(gc, "ALL_LANGUAGES", ["en", "vi"])
     monkeypatch.setattr(gc, "_fetch_page", lambda *a, **k: (_page(2), None))
 
-    def broken_sink(lang, batch):
+    def broken_sink(lang, batch, state):
         raise OSError("disk full")
 
     with pytest.raises(OSError):

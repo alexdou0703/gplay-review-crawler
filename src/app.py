@@ -12,11 +12,12 @@ import pandas as pd
 
 from crawler.url_parser import parse_package_id, parse_url
 from crawler.gplay_crawler import (
-    CrawlState, crawl_reviews_iter, crawl_reviews_all_languages, ALL_LANGUAGES, fetch_app_name,
+    crawl_reviews_iter, crawl_reviews_all_languages, resume_or_fresh,
+    ALL_LANGUAGES, fetch_app_name,
 )
 from storage.sqlite_store import (
-    init_db, save_reviews, get_reviews, count_reviews,
-    save_app_name, list_packages_with_names,
+    init_db, get_reviews, count_reviews, save_app_name, list_packages_with_names,
+    save_reviews_and_state, save_crawl_state, load_crawl_state,
 )
 from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
 
@@ -94,14 +95,29 @@ if crawl_btn and user_input:
         save_app_name(pkg_id, app_title, DB_PATH)
         st.markdown(info_box(f"<strong>{app_title}</strong> <code>{pkg_id}</code> — crawling up to {count} reviews..."), unsafe_allow_html=True)
 
-        # Every batch is saved as it arrives, so an interrupted crawl keeps
-        # everything fetched so far (minus at most one batch).
+        # Every page is saved with its crawl checkpoint as it arrives, so an
+        # interrupted crawl keeps everything fetched so far and resumes from
+        # the stored cursor instead of restarting.
         inserted_counter = {"n": 0}
 
-        def save_batch(batch_lang, batch):
-            inserted_counter["n"] += save_reviews(batch, pkg_id, DB_PATH)
+        def save_batch(batch_lang, batch, batch_state):
+            inserted_counter["n"] += save_reviews_and_state(batch, pkg_id, batch_state, DB_PATH)
 
         if lang == "All languages":
+            states = {
+                l: resume_or_fresh(
+                    load_crawl_state(pkg_id, l, effective_country, DB_PATH),
+                    pkg_id, l, effective_country,
+                )
+                for l in ALL_LANGUAGES
+            }
+            resumable = sum(1 for s in states.values() if s.cursor)
+            if resumable:
+                st.markdown(info_box(
+                    f"Previous crawl incomplete — resuming <strong>{resumable}</strong> "
+                    "language(s) from checkpoint"
+                ), unsafe_allow_html=True)
+
             progress_bar = st.progress(0, text="Starting multi-language crawl...")
 
             def on_progress(l, fetched, total_so_far):
@@ -114,19 +130,31 @@ if crawl_btn and user_input:
 
             raw, summary = crawl_reviews_all_languages(
                 pkg_id, count_per_lang=count, country=effective_country,
-                progress_callback=on_progress, on_batch=save_batch,
+                progress_callback=on_progress, on_batch=save_batch, states=states,
             )
             progress_bar.progress(1.0, text=f"Done — {len(raw)} unique reviews across {len(ALL_LANGUAGES)} languages")
         else:
-            state = CrawlState(pkg_id, lang, effective_country)
+            state = resume_or_fresh(
+                load_crawl_state(pkg_id, lang, effective_country, DB_PATH),
+                pkg_id, lang, effective_country,
+            )
+            if state.cursor:
+                st.markdown(info_box(
+                    "Previous crawl incomplete — resuming from checkpoint"
+                ), unsafe_allow_html=True)
             raw = []
             with st.spinner(f"Crawling reviews in [{lang}] (this may take a moment)..."):
                 for batch in crawl_reviews_iter(
                     pkg_id, count=count, lang=lang, country=effective_country, state=state
                 ):
-                    save_batch(lang, batch)
+                    save_batch(lang, batch, state)
                     raw.extend(batch)
             summary = {lang: state}
+
+        # Record terminal statuses too — a throttled/complete verdict can land
+        # after the last saved page (or with no page at all).
+        for s in summary.values():
+            save_crawl_state(s, DB_PATH)
 
         inserted = inserted_counter["n"]
         total_stored = count_reviews(pkg_id, DB_PATH)

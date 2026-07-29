@@ -115,8 +115,10 @@ def crawl_reviews_iter(
     """
     if state is None:
         state = CrawlState(package_id, lang, country)
+    state.status = "in_progress"  # a resumed throttled state is live again
+    state.error_msg = None  # stale failure detail must not survive a successful resume
 
-    cursor = state.cursor  # None = start from newest
+    cursor = state.cursor  # None = start from newest; set = resume from checkpoint
 
     while count is None or state.fetched < count:
         page_size = PAGE_SIZE if count is None else min(PAGE_SIZE, count - state.fetched)
@@ -172,6 +174,18 @@ def crawl_reviews_iter(
     state.status = "complete"
 
 
+def resume_or_fresh(prior, package_id: str, lang: str, country: str) -> CrawlState:
+    """Reuse a stored crawl state when it holds a resumable checkpoint.
+
+    Resumable = interrupted or throttled with a live cursor. Completed or
+    errored crawls restart from the newest reviews instead — dedup and upsert
+    make a restart cheap, and it picks up reviews posted since.
+    """
+    if prior is not None and prior.cursor and prior.status in ("in_progress", "throttled"):
+        return prior
+    return CrawlState(package_id, lang, country)
+
+
 def crawl_reviews(
     package_id: str,
     count: int = 500,
@@ -196,15 +210,18 @@ def crawl_reviews_all_languages(
     delay: float = 1.0,
     progress_callback=None,
     on_batch=None,
+    states: dict[str, CrawlState] | None = None,
 ) -> tuple[list[dict], dict[str, CrawlState]]:
     """
     Crawl reviews across ALL_LANGUAGES sequentially, deduplicated by reviewId.
 
-    on_batch(lang, new_reviews) is called with each deduplicated page as it
-    arrives — persist there so progress survives interruption. on_batch
+    on_batch(lang, new_reviews, state) is called with each deduplicated page as
+    it arrives — persist both there so progress survives interruption. on_batch
     exceptions propagate: a broken storage sink is fatal, not a per-language
     condition.
     progress_callback(lang, fetched_new, total_so_far) is called once per language.
+    states maps lang → CrawlState to start from (e.g. loaded checkpoints via
+    resume_or_fresh); languages without an entry start fresh.
 
     Returns (deduplicated reviews, {lang: CrawlState}) so callers can tell
     complete languages apart from throttled/errored ones.
@@ -214,7 +231,7 @@ def crawl_reviews_all_languages(
     summary: dict[str, CrawlState] = {}
 
     for i, lang in enumerate(ALL_LANGUAGES):
-        state = CrawlState(package_id, lang, country)
+        state = (states or {}).get(lang) or CrawlState(package_id, lang, country)
         summary[lang] = state
         lang_new = 0
 
@@ -240,11 +257,14 @@ def crawl_reviews_all_languages(
                 if rid and rid not in seen_ids:
                     seen_ids.add(rid)
                     new_reviews.append(r)
+            # Fully-deduped pages skip on_batch, so their cursor advance is not
+            # checkpointed: an interrupt then re-fetches those pages (idempotent
+            # upserts), it never skips data.
             if new_reviews:
                 merged.extend(new_reviews)
                 lang_new += len(new_reviews)
                 if on_batch:
-                    on_batch(lang, new_reviews)
+                    on_batch(lang, new_reviews, state)
 
         if progress_callback:
             progress_callback(lang, lang_new, len(merged))
