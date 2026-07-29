@@ -116,7 +116,8 @@ if crawl_btn and user_input:
             else:
                 pkg_id = parse_package_id(user_input)
 
-        effective_country = "us"
+        # Respect the store country from the pasted URL's gl param when present
+        effective_country = detected_country or "us"
         app_title = fetch_app_name(pkg_id, country=effective_country)
         save_app_name(pkg_id, app_title, DB_PATH)
         st.markdown(info_box(f"<strong>{app_title}</strong> <code>{pkg_id}</code> — crawling up to {count} reviews..."), unsafe_allow_html=True)
@@ -253,9 +254,15 @@ if "current_df" in st.session_state and not st.session_state.current_df.empty:
                 selected_stars.append(star)
     filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
 
-    # Export buttons — top-right, always visible before table
-    csv = filtered.to_csv(index=False)
-    json_str = filtered.to_json(orient="records", force_ascii=False, indent=2)
+    # Export buttons — top-right, always visible before table.
+    # Cached so every checkbox click doesn't re-serialize the whole dataset;
+    # keyed on filter + row count + latest crawl time, _df itself is not hashed.
+    @st.cache_data
+    def build_exports(pkg_key, stars_key, row_count, latest_crawl, _df):
+        return _df.to_csv(index=False), _df.to_json(orient="records", force_ascii=False, indent=2)
+
+    latest_crawl = str(filtered["crawled_at"].max()) if not filtered.empty else ""
+    csv, json_str = build_exports(pkg, tuple(sorted(selected_stars)), len(filtered), latest_crawl, filtered)
     with hcol_csv:
         st.download_button(
             "Download CSV",

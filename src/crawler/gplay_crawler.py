@@ -24,8 +24,15 @@ from google_play_scraper.features.reviews import _fetch_review_items
 
 logger = logging.getLogger(__name__)
 
-# Common language codes to use when crawling "all languages"
-ALL_LANGUAGES = ["en", "vi", "zh", "ja", "ko", "fr", "de", "es", "pt", "ru", "ar", "th", "id"]
+# Languages swept in "all languages" mode, roughly by expected review volume.
+# Chinese needs explicit variants: bare "zh" is served as zh-CN, so zh-TW
+# reviews would be silently missed. Cross-language dedup by reviewId makes a
+# wide sweep safe.
+ALL_LANGUAGES = [
+    "en", "es", "pt", "hi", "id", "ru", "ja", "ko", "vi", "th",
+    "zh-CN", "zh-TW", "fr", "de", "it", "tr", "pl", "nl", "uk",
+    "ar", "ms", "tl",
+]
 
 # Reviews requested per page. Google serves up to ~200 for NEWEST sort.
 PAGE_SIZE = 200

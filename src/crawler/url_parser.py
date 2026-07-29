@@ -34,7 +34,9 @@ def parse_package_id(user_input: str) -> str:
         pkg, _ = parse_url(user_input)
         return pkg
 
-    # Plain package ID: contains dots, no spaces (e.g. com.roblox.client)
+    # Plain package ID: contains dots, no spaces (e.g. com.roblox.client).
+    # Known trade-off: dotted app names like "Notion.so" also match this rule
+    # and skip the name search — paste the URL or package ID for those apps.
     if "." in user_input and " " not in user_input:
         return user_input
 

@@ -122,6 +122,14 @@ def test_all_languages_dedups_and_reports_per_lang_status(monkeypatch, sleeps):
     assert "boom" in summary["de"].error_msg
 
 
+def test_language_matrix_uses_explicit_chinese_variants():
+    # Bare "zh" is served as zh-CN by Google Play; sweeping it would silently
+    # miss zh-TW while looking covered.
+    assert "zh" not in gc.ALL_LANGUAGES
+    assert {"zh-CN", "zh-TW"} <= set(gc.ALL_LANGUAGES)
+    assert len(gc.ALL_LANGUAGES) == len(set(gc.ALL_LANGUAGES))
+
+
 def test_on_batch_failure_propagates_as_fatal(monkeypatch, sleeps):
     monkeypatch.setattr(gc, "ALL_LANGUAGES", ["en", "vi"])
     monkeypatch.setattr(gc, "_fetch_page", lambda *a, **k: (_page(2), None))
