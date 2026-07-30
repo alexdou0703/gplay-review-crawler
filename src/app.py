@@ -52,7 +52,7 @@ sync_target = None  # (pkg, name) — sync runs AFTER the loop so its spinner ge
 if pkg_entries:
     for entry_pkg, entry_name in pkg_entries:
         n = count_reviews(entry_pkg, DB_PATH)
-        col_open, col_sync = st.sidebar.columns([4, 1])
+        col_open, col_sync, col_del = st.sidebar.columns([3.2, 0.9, 0.9])
         with col_open:
             if st.button(f"{entry_name}  ({n:,})", key=f"sidebar_{entry_pkg}"):
                 st.session_state.current_package_id = entry_pkg
@@ -60,33 +60,30 @@ if pkg_entries:
         with col_sync:
             if st.button("↻", key=f"sync_{entry_pkg}", help="Fetch reviews posted since the last crawl"):
                 sync_target = (entry_pkg, entry_name)
+        with col_del:
+            if st.button("🗑", key=f"del_{entry_pkg}", help="Delete this app and all its reviews"):
+                st.session_state.confirm_delete = entry_pkg
+                st.rerun()
+
+        # Inline confirmation right under the row — deleting is destructive
+        if st.session_state.get("confirm_delete") == entry_pkg:
+            st.sidebar.markdown(f"Delete **{entry_name}** and all its reviews?")
+            col_yes, col_no = st.sidebar.columns(2)
+            if col_yes.button("Delete", key=f"del_yes_{entry_pkg}"):
+                deleted = delete_package(entry_pkg, DB_PATH)
+                if st.session_state.get("current_package_id") == entry_pkg:
+                    st.session_state.pop("current_package_id", None)
+                    st.session_state.pop("current_df", None)
+                st.session_state.pop("confirm_delete", None)
+                st.session_state.last_crawl_summary = (
+                    "success", f"Deleted <strong>{entry_name}</strong> ({deleted:,} reviews)"
+                )
+                st.rerun()
+            if col_no.button("Cancel", key=f"del_no_{entry_pkg}"):
+                st.session_state.pop("confirm_delete", None)
+                st.rerun()
 else:
     st.sidebar.info("No apps crawled yet.")
-
-# App management — delete is destructive, so it asks for confirmation
-if pkg_entries:
-    with st.sidebar.expander("Manage apps"):
-        for entry_pkg, entry_name in pkg_entries:
-            if st.session_state.get("confirm_delete") == entry_pkg:
-                st.warning(f"Delete **{entry_name}** and all its reviews?")
-                col_yes, col_no = st.columns(2)
-                if col_yes.button("Delete", key=f"del_yes_{entry_pkg}"):
-                    deleted = delete_package(entry_pkg, DB_PATH)
-                    if st.session_state.get("current_package_id") == entry_pkg:
-                        st.session_state.pop("current_package_id", None)
-                        st.session_state.pop("current_df", None)
-                    st.session_state.pop("confirm_delete", None)
-                    st.session_state.last_crawl_summary = (
-                        "success", f"Deleted <strong>{entry_name}</strong> ({deleted:,} reviews)"
-                    )
-                    st.rerun()
-                if col_no.button("Cancel", key=f"del_no_{entry_pkg}"):
-                    st.session_state.pop("confirm_delete", None)
-                    st.rerun()
-            else:
-                if st.button(f"🗑 {entry_name}", key=f"del_{entry_pkg}"):
-                    st.session_state.confirm_delete = entry_pkg
-                    st.rerun()
 
 if sync_target:
     sync_pkg, sync_name = sync_target

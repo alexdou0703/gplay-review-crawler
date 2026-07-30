@@ -60,10 +60,13 @@ html, body, [class*="css"] {
 /* All states pinned: the light base theme paints focused/active buttons with
    its white secondary background, which turns the pale icon invisible on the
    dark sidebar. */
-[data-testid="stSidebar"] .stButton > button,
-[data-testid="stSidebar"] .stButton > button:focus,
-[data-testid="stSidebar"] .stButton > button:focus:not(:active),
-[data-testid="stSidebar"] .stButton > button:active {
+/* Descendant (not child) selector: buttons with help tooltips are wrapped in
+   an extra container, which a `>` selector misses — that left the sync icon
+   white-on-white. */
+[data-testid="stSidebar"] .stButton button,
+[data-testid="stSidebar"] .stButton button:focus,
+[data-testid="stSidebar"] .stButton button:focus:not(:active),
+[data-testid="stSidebar"] .stButton button:active {
     background: rgba(139, 92, 246, 0.25) !important;
     border: 1px solid rgba(139, 92, 246, 0.45) !important;
     color: #EDE9FE !important;
@@ -76,7 +79,7 @@ html, body, [class*="css"] {
     text-align: left !important;
     cursor: pointer !important;
 }
-[data-testid="stSidebar"] .stButton > button:hover {
+[data-testid="stSidebar"] .stButton button:hover {
     background: rgba(139, 92, 246, 0.45) !important;
     border-color: #7C3AED !important;
     color: #FFFFFF !important;
