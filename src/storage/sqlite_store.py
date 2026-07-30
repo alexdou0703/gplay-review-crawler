@@ -217,6 +217,16 @@ def get_stored_country(package_id: str, db_path: str) -> str | None:
     return row[0] if row else None
 
 
+def delete_package(package_id: str, db_path: str) -> int:
+    """Remove a package entirely — reviews, crawl checkpoints, and app name —
+    in one transaction. Returns the number of review rows deleted."""
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute("DELETE FROM reviews WHERE package_id = ?", (package_id,))
+        conn.execute("DELETE FROM crawl_state WHERE package_id = ?", (package_id,))
+        conn.execute("DELETE FROM apps WHERE package_id = ?", (package_id,))
+        return cur.rowcount
+
+
 def list_stored_langs(package_id: str, db_path: str) -> list[str]:
     """Return distinct languages stored for a package (sync targets)."""
     sql = "SELECT DISTINCT lang FROM reviews WHERE package_id = ? AND lang IS NOT NULL"

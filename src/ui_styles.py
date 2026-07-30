@@ -57,10 +57,16 @@ html, body, [class*="css"] {
     margin-bottom: 0.75rem !important;
 }
 
-[data-testid="stSidebar"] .stButton > button {
-    background: rgba(139, 92, 246, 0.12) !important;
-    border: 1px solid rgba(139, 92, 246, 0.25) !important;
-    color: #DDD6FE !important;
+/* All states pinned: the light base theme paints focused/active buttons with
+   its white secondary background, which turns the pale icon invisible on the
+   dark sidebar. */
+[data-testid="stSidebar"] .stButton > button,
+[data-testid="stSidebar"] .stButton > button:focus,
+[data-testid="stSidebar"] .stButton > button:focus:not(:active),
+[data-testid="stSidebar"] .stButton > button:active {
+    background: rgba(139, 92, 246, 0.25) !important;
+    border: 1px solid rgba(139, 92, 246, 0.45) !important;
+    color: #EDE9FE !important;
     border-radius: 8px !important;
     padding: 0.5rem 0.875rem !important;
     font-size: 0.825rem !important;
@@ -71,8 +77,9 @@ html, body, [class*="css"] {
     cursor: pointer !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background: rgba(139, 92, 246, 0.28) !important;
+    background: rgba(139, 92, 246, 0.45) !important;
     border-color: #7C3AED !important;
+    color: #FFFFFF !important;
 }
 
 /* ── Headings ───────────────────────────────────────────────────────────────── */
