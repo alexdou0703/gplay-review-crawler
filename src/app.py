@@ -137,7 +137,10 @@ with st.form("queue_crawl_form"):
         count_choice = st.selectbox("Max reviews / language", [100, 200, 500, 1000, "Full history"], index=1)
     with col3:
         delay = st.number_input("Page delay (s)", min_value=0.0, value=1.0, step=0.25)
-    crawl_btn = st.form_submit_button("Queue crawl", type="primary", disabled=not user_input.strip())
+    # Form widgets only publish their values when the form is submitted. Do not
+    # derive the submit button's disabled state from `user_input`, otherwise the
+    # button stays disabled while the user is typing and can never submit.
+    crawl_btn = st.form_submit_button("Queue crawl", type="primary")
 
 if crawl_btn and user_input.strip():
     queued = []
@@ -167,6 +170,8 @@ if crawl_btn and user_input.strip():
     if errors:
         st.session_state.last_crawl_summary = ("warning", "Could not queue: " + "; ".join(errors))
     st.rerun()
+elif crawl_btn:
+    st.session_state.last_crawl_summary = ("warning", "Enter at least one Google Play URL or package ID.")
 
 # Outcome of the previous crawl run (stashed before st.rerun above)
 if "last_crawl_summary" in st.session_state:
