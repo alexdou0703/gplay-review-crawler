@@ -2,6 +2,7 @@
 
 import sys
 import os
+import threading
 from html import escape as html_escape
 
 # Ensure src/ is in path for local imports
@@ -11,17 +12,15 @@ import streamlit as st
 import pandas as pd
 
 from crawler.url_parser import parse_package_id, parse_url
-from crawler.gplay_crawler import (
-    crawl_reviews_iter, crawl_reviews_all_languages, resume_or_fresh,
-    ALL_LANGUAGES, fetch_app_name,
-)
+from crawler.gplay_crawler import ALL_LANGUAGES, fetch_app_name
 from storage.sqlite_store import (
     init_db, get_reviews, count_reviews, save_app_name, list_packages_with_names,
-    save_reviews_and_state, save_crawl_state, load_crawl_state, delete_package,
+    delete_package, enqueue_job, list_jobs, request_job_cancel, retry_job,
 )
-from crawl_service import sync_package
+from crawl_jobs import display_status
+from crawl_worker import run_worker
 from analysis_ui import render_analysis_tab
-from ui_styles import DRAVASTUDIO_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
+from ui_styles import MERICRAWLER_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
 
 # --- Config ---
 # Try local data/ dir first; fall back to /tmp on read-only cloud filesystems (Streamlit Cloud)
@@ -33,17 +32,42 @@ except OSError:
     DB_PATH = "/tmp/reviews.db"
 
 st.set_page_config(
-    page_title="Dravastudio — Review Crawler",
+    page_title="Mericrawler — Review Intelligence",
     page_icon="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/search/default/24px.svg",
     layout="wide",
 )
 
 # Inject brand styles
-st.markdown(DRAVASTUDIO_CSS, unsafe_allow_html=True)
+st.markdown(MERICRAWLER_CSS, unsafe_allow_html=True)
 st.markdown(FOOTER_CSS_EXTRA, unsafe_allow_html=True)
 
 # Init DB on startup
 init_db(DB_PATH)
+
+
+@st.cache_resource(show_spinner=False)
+def start_embedded_worker(db_path: str):
+    """Keep the hosted demo usable when Streamlit has no second process."""
+    stop_event = threading.Event()
+    worker = threading.Thread(
+        target=run_worker,
+        kwargs={
+            "db_path": db_path,
+            "workers": 1,
+            "min_request_interval": 1.0,
+            "poll_interval": 1.0,
+            "stop_event": stop_event,
+            "install_signal_handlers": False,
+        },
+        name="mericrawler-embedded-worker",
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+if os.getenv("MERICRAWLER_EMBED_WORKER", "1") == "1":
+    start_embedded_worker(DB_PATH)
 
 # --- Sidebar: previously crawled apps ---
 st.sidebar.title("Crawled Apps")
@@ -87,194 +111,62 @@ else:
 
 if sync_target:
     sync_pkg, sync_name = sync_target
-    with st.sidebar:
-        with st.spinner(f"Syncing {sync_name}..."):
-            # Page budget keeps a shallow dataset from turning this
-            # click into a blocking full-history walk.
-            results = sync_package(sync_pkg, DB_PATH, max_pages=25)
-    total_new = sum(new for new, _ in results.values())
-    throttled = [l for l, (_, s) in results.items() if s.status == "throttled"]
-    partial = [l for l, (_, s) in results.items() if s.status == "partial"]
-    if throttled or partial:
-        notes = []
-        if throttled:
-            notes.append(f"rate-limited on: {', '.join(throttled)} — try again later")
-        if partial:
-            notes.append(
-                f"dataset too shallow to catch up on: {', '.join(partial)} — "
-                "run <code>python src/crawl_cli.py … --sync</code> for an unbounded sync"
-            )
-        st.session_state.last_crawl_summary = (
-            "warning",
-            f"Synced <strong>{sync_name}</strong>: +{total_new} new — partial; " + "; ".join(notes),
-        )
-    else:
-        st.session_state.last_crawl_summary = (
-            "success", f"Synced <strong>{sync_name}</strong>: +{total_new} new reviews"
-        )
+    enqueue_job(sync_pkg, DB_PATH, app_name=sync_name, mode="sync", langs=[])
+    st.session_state.last_crawl_summary = (
+        "success", f"Queued incremental sync for <strong>{sync_name}</strong>."
+    )
     st.session_state.current_package_id = sync_pkg
-    st.session_state.current_df = get_reviews(sync_pkg, DB_PATH)
     st.rerun()
 
 # --- Main panel ---
 st.markdown(BRAND_HEADER_HTML, unsafe_allow_html=True)
-st.title("Play Store Review Crawler")
-st.caption("Enter an app name, Google Play URL, or package ID to fetch reviews.")
+st.title("Mericrawler")
+st.caption("Queue Google Play review crawls, then inspect fresh results while the worker runs.")
 
-col1, col2, col3 = st.columns([4, 1, 1])
-with col1:
-    user_input = st.text_input(
-        "App name / URL / package ID",
-        placeholder="https://play.google.com/store/apps/details?id=com.roblox.client",
+with st.form("queue_crawl_form"):
+    user_input = st.text_area(
+        "Apps to queue (one URL, package ID, or app name per line)",
+        placeholder="com.roblox.client\nhttps://play.google.com/store/apps/details?id=com.example.app&gl=vn",
+        height=100,
     )
-with col2:
-    # "All languages" crawls ALL_LANGUAGES sequentially (~200 reviews each)
-    lang_options = ["All languages"] + ALL_LANGUAGES
-    lang = st.selectbox("Language", lang_options, index=0)
-FULL_HISTORY = "All (full history)"
-with col3:
-    count_choice = st.selectbox(
-        "Max reviews",
-        [100, 200, 500, 1000, FULL_HISTORY],
-        index=1,
-        help="Per language when 'All languages' is selected. "
-             f"'{FULL_HISTORY}' walks the complete history — big apps take hours; "
-             "progress is checkpointed per page, so interruptions resume.",
-    )
-    # None = no cap: crawl_reviews_iter walks until Google has no more pages
-    count = None if count_choice == FULL_HISTORY else count_choice
+    col1, col2, col3 = st.columns([4, 1, 1])
+    with col1:
+        lang_options = ["All languages"] + ALL_LANGUAGES
+        lang = st.selectbox("Language", lang_options, index=0)
+    with col2:
+        count_choice = st.selectbox("Max reviews / language", [100, 200, 500, 1000, "Full history"], index=1)
+    with col3:
+        delay = st.number_input("Page delay (s)", min_value=0.0, value=1.0, step=0.25)
+    crawl_btn = st.form_submit_button("Queue crawl", type="primary", disabled=not user_input.strip())
 
-crawl_btn = st.button("Crawl Reviews", type="primary", disabled=not user_input)
-if count is None:
-    st.caption(
-        "⏳ Full history in the browser keeps this tab busy for hours on big apps — "
-        "every page is saved immediately and an interrupted crawl resumes from its checkpoint. "
-        "For unattended runs prefer `python src/crawl_cli.py <app> --full`."
-    )
-else:
-    st.caption(
-        "Full-history crawls can take hours — pick 'All (full history)' here (resumable), or run "
-        "headless with `python src/crawl_cli.py <app> --full` and use this page to browse results."
-    )
-
-# --- Crawl action ---
-if crawl_btn and user_input:
-    try:
-        with st.spinner("Resolving package ID..."):
+if crawl_btn and user_input.strip():
+    queued = []
+    errors = []
+    selected_langs = ALL_LANGUAGES if lang == "All languages" else [lang]
+    count = None if count_choice == "Full history" else count_choice
+    for raw_input in [line.strip() for line in user_input.splitlines() if line.strip()]:
+        try:
             detected_country = None
-            if "play.google.com" in user_input:
-                pkg_id, detected_country = parse_url(user_input)
+            if "play.google.com" in raw_input:
+                pkg_id, detected_country = parse_url(raw_input)
             else:
-                pkg_id = parse_package_id(user_input)
-
-        # Respect the store country from the pasted URL's gl param when present
-        effective_country = detected_country or "us"
-        app_title = fetch_app_name(pkg_id, country=effective_country)
-        save_app_name(pkg_id, app_title, DB_PATH)
-        scope_txt = "full history" if count is None else f"up to {count:,} reviews"
-        st.markdown(info_box(f"<strong>{app_title}</strong> <code>{pkg_id}</code> — crawling {scope_txt}..."), unsafe_allow_html=True)
-
-        # Every page is saved with its crawl checkpoint as it arrives, so an
-        # interrupted crawl keeps everything fetched so far and resumes from
-        # the stored cursor instead of restarting.
-        inserted_counter = {"n": 0}
-
-        def save_batch(batch_lang, batch, batch_state):
-            inserted_counter["n"] += save_reviews_and_state(batch, pkg_id, batch_state, DB_PATH)
-
-        if lang == "All languages":
-            states = {
-                l: resume_or_fresh(
-                    load_crawl_state(pkg_id, l, effective_country, DB_PATH),
-                    pkg_id, l, effective_country,
-                )
-                for l in ALL_LANGUAGES
-            }
-            resumable = sum(1 for s in states.values() if s.cursor)
-            if resumable:
-                st.markdown(info_box(
-                    f"Previous crawl incomplete — resuming <strong>{resumable}</strong> "
-                    "language(s) from checkpoint"
-                ), unsafe_allow_html=True)
-
-            progress_bar = st.progress(0, text="Starting multi-language crawl...")
-
-            def on_progress(l, fetched, total_so_far):
-                idx = ALL_LANGUAGES.index(l) + 1
-                pct = idx / len(ALL_LANGUAGES)
-                progress_bar.progress(
-                    pct,
-                    text=f"[{idx}/{len(ALL_LANGUAGES)}] {l}: +{fetched} unique | total {total_so_far}",
-                )
-
-            raw, summary = crawl_reviews_all_languages(
-                pkg_id, count_per_lang=count, country=effective_country,
-                progress_callback=on_progress, on_batch=save_batch, states=states,
+                pkg_id = parse_package_id(raw_input)
+            country = detected_country or "us"
+            app_title = fetch_app_name(pkg_id, country=country)
+            save_app_name(pkg_id, app_title, DB_PATH)
+            job_id = enqueue_job(
+                pkg_id, DB_PATH, app_name=app_title, langs=selected_langs,
+                country=country, count_per_lang=count, delay=delay,
             )
-            progress_bar.progress(1.0, text=f"Done — {len(raw)} unique reviews across {len(ALL_LANGUAGES)} languages")
-        else:
-            state = resume_or_fresh(
-                load_crawl_state(pkg_id, lang, effective_country, DB_PATH),
-                pkg_id, lang, effective_country,
-            )
-            if state.cursor:
-                st.markdown(info_box(
-                    "Previous crawl incomplete — resuming from checkpoint"
-                ), unsafe_allow_html=True)
-            raw = []
-            with st.spinner(f"Crawling reviews in [{lang}] (this may take a moment)..."):
-                for batch in crawl_reviews_iter(
-                    pkg_id, count=count, lang=lang, country=effective_country, state=state
-                ):
-                    save_batch(lang, batch, state)
-                    raw.extend(batch)
-            summary = {lang: state}
-
-        # Record terminal statuses too — a throttled/complete verdict can land
-        # after the last saved page (or with no page at all).
-        for s in summary.values():
-            save_crawl_state(s, DB_PATH)
-
-        inserted = inserted_counter["n"]
-        total_stored = count_reviews(pkg_id, DB_PATH)
-
-        st.session_state.current_package_id = pkg_id
-        st.session_state.current_df = get_reviews(pkg_id, DB_PATH)
-
-        # Partial data must never be presented as success.
-        problems = {l: s for l, s in summary.items() if s.status in ("throttled", "error")}
-        counts_html = (
-            f"Fetched <strong>{len(raw)}</strong> reviews — "
-            f"<strong>{inserted}</strong> new added — "
-            f"<strong>{total_stored}</strong> total stored"
-        )
-        if problems:
-            detail = ", ".join(
-                f"{l}: {s.status}" + (f" ({html_escape(s.error_msg)})" if s.error_msg else "")
-                for l, s in problems.items()
-            )
-            msg = (
-                "warning",
-                f"{counts_html}<br><strong>Partial results</strong> — Google rate-limited or "
-                f"errored on: {detail}. Run the same crawl again later to fetch the rest.",
-            )
-        elif len(raw) == 0:
-            msg = (
-                "warning",
-                f"No reviews found for <strong>{pkg_id}</strong>. "
-                "The app may be new, have no public reviews yet, or not available in this language.",
-            )
-        else:
-            msg = ("success", counts_html)
-
-        # Stash the outcome so it survives st.rerun() (rendered below).
-        st.session_state.last_crawl_summary = msg
-        st.rerun()
-
-    except ValueError as e:
-        st.markdown(error_box(f"Could not resolve app: {e}"), unsafe_allow_html=True)
-    except Exception as e:
-        st.markdown(error_box(f"Crawl failed: {e}"), unsafe_allow_html=True)
+            queued.append(f"{app_title} ({job_id[:8]})")
+            st.session_state.current_package_id = pkg_id
+        except Exception as exc:
+            errors.append(f"{raw_input}: {exc}")
+    if queued:
+        st.session_state.last_crawl_summary = ("success", "Queued: " + ", ".join(queued))
+    if errors:
+        st.session_state.last_crawl_summary = ("warning", "Could not queue: " + "; ".join(errors))
+    st.rerun()
 
 # Outcome of the previous crawl run (stashed before st.rerun above)
 if "last_crawl_summary" in st.session_state:
@@ -282,10 +174,56 @@ if "last_crawl_summary" in st.session_state:
     render_box = {"success": success_box, "warning": warning_box, "error": error_box}[kind]
     st.markdown(render_box(html), unsafe_allow_html=True)
 
+# --- Queue monitor ----------------------------------------------------------
+_fragment = st.fragment(run_every="5s") if hasattr(st, "fragment") else (lambda fn: fn)
+
+
+@_fragment
+def render_queue_panel():
+    st.divider()
+    st.subheader("Crawl queue")
+    if not hasattr(st, "fragment"):
+        if st.button("Refresh queue"):
+            st.rerun()
+    jobs = list_jobs(DB_PATH, limit=50)
+    if not jobs:
+        st.info("No jobs queued. Start with one or more apps above.")
+    else:
+        for job in jobs:
+            label = job.get("app_name") or job["package_id"]
+            status = display_status(job["status"])
+            done = job["languages_completed"]
+            total = job["total_languages"] or len(job["languages"]) or 1
+            progress = min(1.0, done / total)
+            left, middle, right = st.columns([4, 3, 1])
+            with left:
+                st.markdown(
+                    f"**{label}**  \n"
+                    f"`{job['package_id']}` · **{status}** · {job['last_event'] or 'queued'}"
+                )
+            with middle:
+                st.progress(progress, text=f"{done}/{total} languages · {job['inserted_count']:,} new rows")
+            with right:
+                if job["status"] in {"queued", "running", "retrying", "waiting"}:
+                    if st.button("Cancel", key=f"cancel_{job['job_id']}"):
+                        request_job_cancel(job["job_id"], DB_PATH)
+                        st.rerun()
+                elif job["status"] in {"failed", "cancelled", "partial", "throttled"}:
+                    if st.button("Retry", key=f"retry_{job['job_id']}"):
+                        retry_job(job["job_id"], DB_PATH)
+                        st.rerun()
+            if job.get("error_msg"):
+                st.caption(f"Reason: {job['error_msg']}")
+            if job.get("next_retry_at") and job["status"] in {"throttled", "retrying"}:
+                st.caption(f"Suggested next retry: {job['next_retry_at']}")
+
+
+render_queue_panel()
+
 # --- Results ---
-if "current_df" in st.session_state and not st.session_state.current_df.empty:
-    df: pd.DataFrame = st.session_state.current_df
-    pkg = st.session_state.get("current_package_id", "")
+pkg = st.session_state.get("current_package_id", "")
+df: pd.DataFrame = get_reviews(pkg, DB_PATH) if pkg else pd.DataFrame()
+if pkg and not df.empty:
 
     st.divider()
 

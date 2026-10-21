@@ -1,7 +1,7 @@
-"""Dravastudio brand styles and HTML components for the Streamlit app."""
+"""Mericrawler brand styles and HTML components for the Streamlit app."""
 
-# ── Dravastudio brand CSS ─────────────────────────────────────────────────────
-DRAVASTUDIO_CSS = """
+# ── Mericrawler brand CSS ────────────────────────────────────────────────────
+MERICRAWLER_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
@@ -175,6 +175,21 @@ h2, h3 {
     transform: translateY(-1px) !important;
 }
 
+/* Keyboard focus and reduced-motion support for the queue workflow. */
+button:focus-visible, input:focus-visible, textarea:focus-visible,
+[role="button"]:focus-visible {
+    outline: 3px solid #F59E0B !important;
+    outline-offset: 2px !important;
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
 /* ── Download buttons ───────────────────────────────────────────────────────── */
 .stDownloadButton > button {
     background: #FFFFFF !important;
@@ -230,7 +245,7 @@ h2, h3 {
 }
 
 /* ── Custom brand alert boxes ───────────────────────────────────────────────── */
-.drava-info {
+.mericrawler-info {
     background: #EDE9FE;
     border-left: 4px solid #7C3AED;
     border-radius: 10px;
@@ -239,7 +254,7 @@ h2, h3 {
     font-size: 0.9rem;
     margin-bottom: 0.5rem;
 }
-.drava-success {
+.mericrawler-success {
     background: #ECFDF5;
     border-left: 4px solid #10B981;
     border-radius: 10px;
@@ -248,7 +263,7 @@ h2, h3 {
     font-size: 0.9rem;
     margin-bottom: 0.5rem;
 }
-.drava-warning {
+.mericrawler-warning {
     background: #FFFBEB;
     border-left: 4px solid #F59E0B;
     border-radius: 10px;
@@ -257,7 +272,7 @@ h2, h3 {
     font-size: 0.9rem;
     margin-bottom: 0.5rem;
 }
-.drava-error {
+.mericrawler-error {
     background: #FEF2F2;
     border-left: 4px solid #EF4444;
     border-radius: 10px;
@@ -297,7 +312,7 @@ hr { border-color: #DDD6FE !important; margin: 1.5rem 0 !important; }
 # ── Footer CSS (appended to main CSS block via app.py) ───────────────────────
 FOOTER_CSS_EXTRA = """
 <style>
-.drava-footer {
+.mericrawler-footer {
     margin-top: 3rem;
     padding: 1.5rem 0 1rem;
     border-top: 1px solid #DDD6FE;
@@ -307,20 +322,20 @@ FOOTER_CSS_EXTRA = """
     flex-wrap: wrap;
     gap: 0.75rem;
 }
-.drava-footer-brand {
+.mericrawler-footer-brand {
     font-size: 0.95rem;
     font-weight: 700;
     color: #1E1B4B;
     letter-spacing: -0.01em;
 }
-.drava-footer-brand span { color: #7C3AED; }
-.drava-footer-links {
+.mericrawler-footer-brand span { color: #7C3AED; }
+.mericrawler-footer-links {
     display: flex;
     align-items: center;
     gap: 1.5rem;
     flex-wrap: wrap;
 }
-.drava-footer-links a {
+.mericrawler-footer-links a {
     font-size: 0.825rem;
     color: #6B7280;
     text-decoration: none;
@@ -329,8 +344,8 @@ FOOTER_CSS_EXTRA = """
     align-items: center;
     gap: 5px;
 }
-.drava-footer-links a:hover { color: #7C3AED; }
-.drava-footer-copy {
+.mericrawler-footer-links a:hover { color: #7C3AED; }
+.mericrawler-footer-copy {
     font-size: 0.775rem;
     color: #9CA3AF;
     width: 100%;
@@ -357,26 +372,26 @@ BRAND_HEADER_HTML = """
         <div>
             <div style="font-size:1.25rem; font-weight:700; color:#1E1B4B;
                         letter-spacing:-0.02em; line-height:1.2;">
-                Drava<span style="color:#7C3AED;">studio</span>
+                Meri<span style="color:#7C3AED;">crawler</span>
             </div>
             <div style="font-size:0.78rem; color:#6B7280; margin-top:2px;">
                 Google Play Review Intelligence
             </div>
         </div>
     </div>
-    <a href="https://drava.tech" target="_blank"
+    <a href="https://mericrawler.local" target="_blank"
        style="font-size:0.8rem; color:#7C3AED; text-decoration:none; font-weight:500;
               border:1px solid #DDD6FE; padding:0.35rem 0.875rem; border-radius:8px;
               background:#FFFFFF; transition:all 0.2s;">
-        drava.tech
+        Mericrawler
     </a>
 </div>
 """
 
 FOOTER_HTML = """
-<div class="drava-footer">
-    <div class="drava-footer-brand">Drava<span>studio</span></div>
-    <div class="drava-footer-links">
+<div class="mericrawler-footer">
+    <div class="mericrawler-footer-brand">Meri<span>crawler</span></div>
+    <div class="mericrawler-footer-links">
         <a href="mailto:dylannn08200@gmail.com">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -385,29 +400,29 @@ FOOTER_HTML = """
             </svg>
             dylannn08200@gmail.com
         </a>
-        <a href="https://drava.tech" target="_blank">
+        <a href="https://mericrawler.local" target="_blank">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"/>
                 <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
             </svg>
-            drava.tech
+            Mericrawler
         </a>
     </div>
-    <div class="drava-footer-copy">© 2026 Dravastudio. All rights reserved.</div>
+    <div class="mericrawler-footer-copy">© 2026 Mericrawler. Local-first review intelligence.</div>
 </div>
 """
 
 
 # ── Alert box helpers ─────────────────────────────────────────────────────────
 def info_box(msg: str) -> str:
-    return f'<div class="drava-info">{msg}</div>'
+    return f'<div class="mericrawler-info">{msg}</div>'
 
 def success_box(msg: str) -> str:
-    return f'<div class="drava-success">{msg}</div>'
+    return f'<div class="mericrawler-success">{msg}</div>'
 
 def warning_box(msg: str) -> str:
-    return f'<div class="drava-warning">{msg}</div>'
+    return f'<div class="mericrawler-warning">{msg}</div>'
 
 def error_box(msg: str) -> str:
-    return f'<div class="drava-error">{msg}</div>'
+    return f'<div class="mericrawler-error">{msg}</div>'

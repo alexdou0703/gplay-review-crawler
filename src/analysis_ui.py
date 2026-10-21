@@ -7,16 +7,32 @@ import streamlit as st
 
 from analysis.review_analytics import (
     prepare, volume_rating_by_period, detect_spikes, lang_share_by_period,
-    version_timeline, spike_details,
+    version_timeline, spike_details, top_language_share, data_fingerprint,
 )
 
 _FREQ_LABELS = {"Weekly": "W", "Monthly": "ME"}
 
 
+@st.cache_data(max_entries=32)
+def _cached_analysis_tables(fingerprint: str, _df: pd.DataFrame, freq: str):
+    """Cache expensive transforms; fingerprint invalidates after a crawl commit."""
+    volume = detect_spikes(volume_rating_by_period(_df, freq))
+    share = top_language_share(_df, freq, top_n=8)
+    versions = version_timeline(_df)
+    details = spike_details(_df, volume, freq)
+    return volume, share, versions, details
+
+
 def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
+    st.caption(f"Analysis snapshot {data_fingerprint(raw_df)} · package `{pkg}`")
     df = prepare(raw_df)
+    if df.empty:
+        st.info("No dated reviews are available yet. Complete or resume a crawl first.")
+        return
     if len(df) < 100:
-        st.info("Need at least ~100 reviews with dates for meaningful analysis — crawl more first.")
+        st.info(f"Only {len(df):,} dated reviews are available. Trends are directional until ~100 reviews.")
+        # Keep the KPI row useful for small/partial datasets.
+        st.metric("Dated reviews", f"{len(df):,}")
         return
 
     st.caption(
@@ -30,10 +46,10 @@ def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
     # --- Volume + rating over time, spikes flagged ---
     st.subheader("Review volume & rating over time")
     st.caption(
-        "🟦 light bars = review volume · 🟥 red bars = volume spike (≥2× rolling baseline) · "
-        "➖ purple line = average rating"
+        "Bars show review volume; red marks a volume spike (at least 2× the prior baseline); "
+        "the purple line shows average rating."
     )
-    vol = detect_spikes(volume_rating_by_period(df, freq))
+    vol, share, vt, spikes = _cached_analysis_tables(data_fingerprint(raw_df), df, freq)
     base = alt.Chart(vol).encode(x=alt.X("period:T", title=None))
     bars = base.mark_bar(opacity=0.7).encode(
         y=alt.Y("n:Q", title="reviews / period"),
@@ -49,12 +65,11 @@ def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
     )
 
     # --- Spike explanations: the campaign/backlash view ---
-    spikes = spike_details(df, vol, freq)
     if spikes:
         shown = min(10, len(spikes))
         st.subheader(f"Spike windows — latest {shown} of {len(spikes)}")
         # Word badges so the collapsed list is scannable without expanding
-        tone_badge = {"positive": "📈 Campaign?", "negative": "🔥 Backlash?", "mixed": "❓ Organic/mixed"}
+        tone_badge = {"positive": "Positive signal?", "negative": "Negative signal?", "mixed": "Organic / mixed"}
         for s in reversed(spikes[-shown:]):
             label = (
                 f"{tone_badge.get(s['tone'], s['tone'])} · {s['period']:%Y-%m-%d} — "
@@ -84,7 +99,6 @@ def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
 
     # --- Market mix over time ---
     st.subheader("Market mix over time (language share)")
-    share = lang_share_by_period(df, freq)
     normalized = st.toggle("Show as % share", value=True)
     y = (
         alt.Y("share:Q", title="share", axis=alt.Axis(format="%"), stack="normalize")
@@ -105,7 +119,6 @@ def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
 
     # --- Version timeline ---
     st.subheader("Rating by app version (release order)")
-    vt = version_timeline(df)
     if not vt.empty:
         st.altair_chart(
             alt.Chart(vt).mark_circle().encode(
@@ -127,11 +140,11 @@ def render_analysis_tab(raw_df: pd.DataFrame, pkg: str) -> None:
         st.info("No app_version data yet — versions are stored for reviews crawled after the schema upgrade.")
 
     # --- Reply rate ---
-    replied = (df["reply_content"].fillna("") != "").sum()
+    replied = df["reply_content"].fillna("").str.strip().ne("").sum()
     low = df[df["score"] <= 2]
-    low_replied = (low["reply_content"].fillna("") != "").sum()
+    low_replied = low["reply_content"].fillna("").str.strip().ne("").sum()
     st.subheader("Developer engagement")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Reply rate (all)", f"{replied / len(df) * 100:.1f}%")
-    c2.metric("Reply rate (1-2⭐)", f"{low_replied / max(len(low), 1) * 100:.1f}%")
-    c3.metric("1-2⭐ share", f"{len(low) / len(df) * 100:.0f}%")
+    c1.metric("Reply rate (all)", f"{replied / len(df) * 100:.1f}%", help=f"{replied:,} replies / {len(df):,} dated reviews")
+    c2.metric("Reply rate (1-2 stars)", f"{low_replied / max(len(low), 1) * 100:.1f}%", help=f"{low_replied:,} replies / {len(low):,} low-rated reviews")
+    c3.metric("1-2 star share", f"{len(low) / len(df) * 100:.0f}%", help=f"{len(low):,} / {len(df):,}")

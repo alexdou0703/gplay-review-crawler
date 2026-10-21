@@ -9,6 +9,7 @@ for "which market is engaging".
 """
 
 import re
+import hashlib
 from collections import Counter
 
 import pandas as pd
@@ -25,10 +26,34 @@ STOPWORDS = {
 
 
 def prepare(df: pd.DataFrame) -> pd.DataFrame:
-    """Parse review timestamps and drop rows without one. Idempotent."""
+    """Normalize timestamps/null dimensions and drop rows without a date."""
     out = df.copy()
-    out["dt"] = pd.to_datetime(out["review_created_at"], errors="coerce")
+    if "review_id" in out.columns:
+        out = out.drop_duplicates(subset=["review_id"], keep="last")
+    out["dt"] = pd.to_datetime(out["review_created_at"], errors="coerce", utc=True)
+    if "lang" not in out:
+        out["lang"] = "Unknown"
+    out["lang"] = out["lang"].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    if "app_version" not in out:
+        out["app_version"] = None
+    out["app_version"] = out["app_version"].where(
+        out["app_version"].notna() & out["app_version"].astype(str).str.strip().ne(""),
+        "Unknown",
+    )
+    if "reply_content" not in out:
+        out["reply_content"] = ""
+    out["reply_content"] = out["reply_content"].fillna("").astype(str)
     return out.dropna(subset=["dt"])
+
+
+def data_fingerprint(df: pd.DataFrame) -> str:
+    """Stable, cheap invalidation key for cached analysis snapshots."""
+    if df.empty:
+        return "empty"
+    latest_crawl = df.get("crawled_at", pd.Series(dtype=str)).astype(str).max()
+    latest_review = df.get("review_created_at", pd.Series(dtype=str)).astype(str).max()
+    raw = f"{len(df)}|{latest_crawl}|{latest_review}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def volume_rating_by_period(df: pd.DataFrame, freq: str = "W") -> pd.DataFrame:
@@ -40,6 +65,10 @@ def volume_rating_by_period(df: pd.DataFrame, freq: str = "W") -> pd.DataFrame:
         .reset_index()
         .rename(columns={"dt": "period"})
     )
+    # Resampling creates empty calendar buckets. Keep them for chart continuity,
+    # but mark them so spike baselines never treat an unobserved period as a
+    # measured zero-volume period.
+    g["observed"] = g["n"].gt(0)
     return g
 
 
@@ -55,9 +84,14 @@ def detect_spikes(
     campaign/feature push, clearly worse look like a backlash event.
     """
     out = vol.copy()
-    out["baseline"] = out["n"].shift(1).rolling(window, min_periods=max(2, window // 2)).median()
+    observed_n = out["n"].where(out.get("observed", True))
+    out["baseline"] = observed_n.shift(1).rolling(window, min_periods=max(2, window // 2)).median()
+    out["baseline_periods"] = observed_n.shift(1).rolling(window).count()
     out["is_spike"] = (
-        out["baseline"].notna()
+        out.get("observed", True)
+        & out["avg_score"].notna()
+        & out["baseline"].notna()
+        & (out["baseline_periods"] >= max(2, window // 2))
         & (out["n"] >= factor * out["baseline"])
         & (out["n"] >= min_reviews)
     )
@@ -78,7 +112,7 @@ def detect_spikes(
 def lang_share_by_period(df: pd.DataFrame, freq: str = "ME") -> pd.DataFrame:
     """Review count and share per language per period (market-push signal)."""
     g = (
-        df.dropna(subset=["lang"])
+        df
         .set_index("dt")
         .groupby([pd.Grouper(freq=freq), "lang"])
         .size()
@@ -89,6 +123,18 @@ def lang_share_by_period(df: pd.DataFrame, freq: str = "ME") -> pd.DataFrame:
     totals = g.groupby("period")["n"].transform("sum")
     g["share"] = g["n"] / totals
     return g
+
+
+def top_language_share(df: pd.DataFrame, freq: str = "ME", top_n: int = 8) -> pd.DataFrame:
+    """Group the long language tail into an explicit Other bucket."""
+    share = lang_share_by_period(df, freq)
+    if share.empty:
+        return share
+    top = share.groupby("lang")["n"].sum().nlargest(top_n).index
+    share["lang"] = share["lang"].where(share["lang"].isin(top), "Other")
+    grouped = share.groupby(["period", "lang"], as_index=False)["n"].sum()
+    grouped["share"] = grouped["n"] / grouped.groupby("period")["n"].transform("sum")
+    return grouped
 
 
 def version_timeline(df: pd.DataFrame, min_reviews: int = 30) -> pd.DataFrame:

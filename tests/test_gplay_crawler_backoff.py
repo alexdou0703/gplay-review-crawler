@@ -1,4 +1,5 @@
 import pytest
+import threading
 
 from crawler import gplay_crawler as gc
 
@@ -96,6 +97,38 @@ def test_reviews_tagged_with_lang_and_country(monkeypatch, sleeps):
     for r in pages[0]:
         assert r["lang"] == "en"
         assert r["country"] == "us"
+
+
+def test_request_callback_contains_timing_and_outcome(monkeypatch, sleeps):
+    events = []
+    # Re-run through the public callback seam; callbacks must not contain
+    # review text, only request metadata.
+    monkeypatch.setattr(gc, "_fetch_page", lambda *a, **k: (_page(2), None))
+    state = gc.CrawlState("com.x", "en", "us")
+    list(gc.crawl_reviews_iter("com.x", count=2, state=state, request_callback=events.append))
+    assert events[0]["outcome"] == "success"
+    assert events[0]["items_returned"] == 2
+    assert events[0]["elapsed_seconds"] >= 0
+    assert "content" not in events[0]
+
+
+def test_cancel_event_interrupts_retry_backoff(monkeypatch, sleeps):
+    cancel = threading.Event()
+
+    def fake_fetch(*args, **kwargs):
+        raise ConnectionError("HTTP 429")
+
+    def on_event(event):
+        cancel.set()
+
+    monkeypatch.setattr(gc, "_fetch_page", fake_fetch)
+    state = gc.CrawlState("com.x", "en", "us")
+    list(gc.crawl_reviews_iter(
+        "com.x", count=1, state=state,
+        cancel_event=cancel, request_callback=on_event,
+    ))
+    assert state.status == "cancelled"
+    assert sleeps == []
 
 
 def test_all_languages_dedups_and_reports_per_lang_status(monkeypatch, sleeps):

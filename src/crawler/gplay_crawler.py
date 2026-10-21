@@ -15,12 +15,14 @@ on any version bump.
 
 import logging
 import time
+from dataclasses import dataclass, asdict
 
 from google_play_scraper import Sort, app as gplay_app
 from google_play_scraper.constants.element import ElementSpecs
 from google_play_scraper.constants.request import Formats
 from google_play_scraper.exceptions import NotFoundError
 from google_play_scraper.features.reviews import _fetch_review_items
+from crawler.transport import fetch_reviews_page, classify_exception, Outcome
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,22 @@ PAGE_SIZE = 200
 # Wait times between retries when a page fetch fails or comes back empty while
 # the pagination cursor still points at more data (throttling, not end-of-data).
 BACKOFF_DELAYS = [5, 10, 20, 40, 60]
+
+
+@dataclass
+class RequestEvent:
+    package_id: str
+    lang: str
+    country: str
+    attempt: int
+    outcome: str
+    elapsed_seconds: float
+    page_size: int
+    items_returned: int
+    retry_delay: float = 0.0
+
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 class CrawlState:
@@ -82,24 +100,18 @@ def fetch_app_name(package_id: str, lang: str = "en", country: str = "us") -> st
 
 
 def _fetch_page(
-    package_id: str, lang: str, country: str, page_size: int, cursor: str | None
+    package_id: str, lang: str, country: str, page_size: int, cursor: str | None,
+    *, limiter=None, cancel_event=None
 ) -> tuple[list[dict], str | None]:
     """Fetch a single page of parsed review dicts. Exceptions propagate.
 
     Returns (reviews, next_cursor); next_cursor None means no further pages.
     """
-    url = Formats.Reviews.build(lang=lang, country=country)
-    items, token = _fetch_review_items(
-        url, package_id, Sort.NEWEST.value, page_size, None, None, cursor
+    items, token, _ = fetch_reviews_page(
+        package_id, lang, country, page_size, cursor,
+        limiter=limiter, cancel_event=cancel_event,
     )
-    # Terminal responses encode the cursor slot as a list instead of a string.
-    if isinstance(token, list):
-        token = None
-    parsed = [
-        {k: spec.extract_content(item) for k, spec in ElementSpecs.Review.items()}
-        for item in items
-    ]
-    return parsed, token
+    return items, token
 
 
 def crawl_reviews_iter(
@@ -109,6 +121,9 @@ def crawl_reviews_iter(
     country: str = "us",
     delay: float = 1.0,
     state: CrawlState | None = None,
+    limiter=None,
+    cancel_event=None,
+    request_callback=None,
 ):
     """
     Yield pages of raw review dicts, newest first, up to `count` total
@@ -144,12 +159,41 @@ def crawl_reviews_iter(
                     last_error or "empty page with live cursor",
                     attempt, len(BACKOFF_DELAYS), wait,
                 )
-                time.sleep(wait)
+                if cancel_event is not None:
+                    if cancel_event.wait(wait):
+                        state.status = "cancelled"
+                        state.error_msg = "cancel requested during backoff"
+                        return
+                else:
+                    time.sleep(wait)
+            started = time.monotonic()
             try:
-                items, next_cursor = _fetch_page(package_id, lang, country, page_size, cursor)
+                fetch_args = (package_id, lang, country, page_size, cursor)
+                if limiter is not None or cancel_event is not None:
+                    items, next_cursor = _fetch_page(
+                        *fetch_args, limiter=limiter, cancel_event=cancel_event
+                    )
+                else:
+                    items, next_cursor = _fetch_page(*fetch_args)
+                outcome = Outcome.SUCCESS.value if items or next_cursor is None else Outcome.THROTTLED.value
+                if request_callback:
+                    request_callback(RequestEvent(
+                        package_id, lang, country, attempt + 1, outcome,
+                        time.monotonic() - started, page_size, len(items), wait,
+                    ).as_dict())
             except Exception as e:
+                if isinstance(e, InterruptedError):
+                    state.status = "cancelled"
+                    state.error_msg = str(e)
+                    return
                 last_error = e
                 items = None
+                if request_callback:
+                    request_callback(RequestEvent(
+                        package_id, lang, country, attempt + 1,
+                        classify_exception(e).value, time.monotonic() - started,
+                        page_size, 0, wait,
+                    ).as_dict())
                 continue
             if items or next_cursor is None:
                 break  # got data, or clean end of history
@@ -178,7 +222,12 @@ def crawl_reviews_iter(
             state.status = "complete"
             return
 
-        time.sleep(delay)
+        if cancel_event is not None and cancel_event.wait(delay):
+            state.status = "cancelled"
+            state.error_msg = "cancel requested"
+            return
+        if cancel_event is None:
+            time.sleep(delay)
 
     state.status = "complete"
 
@@ -191,6 +240,7 @@ def sync_reviews_iter(
     delay: float = 1.0,
     state: CrawlState | None = None,
     max_pages: int | None = None,
+    cancel_event=None,
 ):
     """
     Yield newest-first pages until the dataset is caught up.
@@ -217,7 +267,8 @@ def sync_reviews_iter(
     consecutive_known = 0
     pages_seen = 0
     for page in crawl_reviews_iter(
-        package_id, count=None, lang=lang, country=country, delay=delay, state=state
+        package_id, count=None, lang=lang, country=country, delay=delay, state=state,
+        cancel_event=cancel_event,
     ):
         known = known_count_fn([r.get("reviewId", "") for r in page]) if known_count_fn else 0
         consecutive_known = consecutive_known + 1 if known == len(page) else 0
@@ -274,6 +325,9 @@ def crawl_reviews_all_languages(
     progress_callback=None,
     on_batch=None,
     states: dict[str, CrawlState] | None = None,
+    limiter=None,
+    cancel_event=None,
+    request_callback=None,
 ) -> tuple[list[dict], dict[str, CrawlState]]:
     """
     Crawl reviews across ALL_LANGUAGES sequentially, deduplicated by reviewId.
@@ -300,7 +354,8 @@ def crawl_reviews_all_languages(
 
         pages = crawl_reviews_iter(
             package_id, count=count_per_lang, lang=lang,
-            country=country, delay=delay, state=state,
+            country=country, delay=delay, state=state, limiter=limiter,
+            cancel_event=cancel_event, request_callback=request_callback,
         )
         while True:
             try:
@@ -334,6 +389,10 @@ def crawl_reviews_all_languages(
 
         # Small delay between languages
         if i < len(ALL_LANGUAGES) - 1:
-            time.sleep(delay)
+            if cancel_event is not None and cancel_event.wait(delay):
+                state.status = "cancelled"
+                break
+            if cancel_event is None:
+                time.sleep(delay)
 
     return merged, summary

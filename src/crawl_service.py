@@ -21,6 +21,7 @@ def sync_package(
     delay: float = 1.0,
     progress_callback=None,
     max_pages: int | None = None,
+    cancel_event=None,
 ) -> dict[str, tuple[int, CrawlState]]:
     """Incrementally sync a package: fetch newest reviews per language until
     the stored dataset is caught up.
@@ -49,6 +50,7 @@ def sync_package(
             package_id, lang=lang, country=country,
             known_count_fn=lambda ids: count_known_review_ids(ids, package_id, db_path),
             delay=delay, state=state, max_pages=max_pages,
+            cancel_event=cancel_event,
         ):
             new_count += save_reviews(page, package_id, db_path)
         results[lang] = (new_count, state)
@@ -67,6 +69,12 @@ def crawl_package(
     delay: float = 1.0,
     page_callback=None,
     fresh: bool = False,
+    limiter=None,
+    cancel_event=None,
+    request_callback=None,
+    language_callback=None,
+    job_id: str | None = None,
+    job_worker_id: str | None = None,
 ) -> dict[str, CrawlState]:
     """Crawl each language with checkpoint persistence, resuming partial work.
 
@@ -93,13 +101,19 @@ def crawl_package(
             logger.info("[%s] resuming from checkpoint (%d fetched so far)", lang, state.fetched)
 
         for page in crawl_reviews_iter(
-            package_id, count=count, lang=lang, country=country, delay=delay, state=state
+            package_id, count=count, lang=lang, country=country, delay=delay, state=state,
+            limiter=limiter, cancel_event=cancel_event, request_callback=request_callback,
         ):
-            inserted = save_reviews_and_state(page, package_id, state, db_path)
+            inserted = save_reviews_and_state(
+                page, package_id, state, db_path,
+                job_id=job_id, worker_id=job_worker_id,
+            )
             if page_callback:
                 page_callback(lang, state, inserted)
 
         save_crawl_state(state, db_path)
         summary[lang] = state
+        if language_callback:
+            language_callback(lang, state)
 
     return summary

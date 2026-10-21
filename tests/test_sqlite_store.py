@@ -48,6 +48,7 @@ def test_migration_adds_columns_and_keeps_rows(tmp_path):
         )
 
     init_db(db)
+    init_db(db)  # migrations are safe to run more than once
 
     with sqlite3.connect(db) as conn:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(reviews)")}

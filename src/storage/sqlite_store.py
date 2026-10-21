@@ -2,8 +2,10 @@
 
 import os
 import sqlite3
+import json
+import uuid
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 SCHEMA = """
@@ -41,6 +43,43 @@ CREATE TABLE IF NOT EXISTS crawl_state (
     updated_at  TEXT NOT NULL,
     PRIMARY KEY (package_id, lang, country)
 );
+CREATE TABLE IF NOT EXISTS crawl_jobs (
+    job_id              TEXT PRIMARY KEY,
+    package_id          TEXT NOT NULL,
+    app_name            TEXT,
+    country             TEXT NOT NULL,
+    languages_json      TEXT NOT NULL,
+    count_per_lang      INTEGER,
+    delay               REAL NOT NULL DEFAULT 1.0,
+    mode                TEXT NOT NULL DEFAULT 'crawl',
+    status              TEXT NOT NULL DEFAULT 'queued',
+    pages_completed     INTEGER NOT NULL DEFAULT 0,
+    fetched_count       INTEGER NOT NULL DEFAULT 0,
+    inserted_count      INTEGER NOT NULL DEFAULT 0,
+    languages_completed INTEGER NOT NULL DEFAULT 0,
+    total_languages     INTEGER NOT NULL DEFAULT 0,
+    last_lang           TEXT,
+    last_event          TEXT,
+    error_class         TEXT,
+    error_msg           TEXT,
+    next_retry_at       TEXT,
+    retry_count         INTEGER NOT NULL DEFAULT 0,
+    cancel_requested    INTEGER NOT NULL DEFAULT 0,
+    worker_id           TEXT,
+    heartbeat_at        TEXT,
+    lease_expires_at    TEXT,
+    created_at          TEXT NOT NULL,
+    started_at          TEXT,
+    finished_at         TEXT,
+    updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_crawl_jobs_status_updated
+    ON crawl_jobs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_crawl_jobs_lease
+    ON crawl_jobs(lease_expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crawl_jobs_active_target
+    ON crawl_jobs(package_id, country)
+    WHERE status IN ('queued', 'running', 'retrying', 'waiting');
 """
 
 # Columns added after the initial release; ALTER'd in on databases
@@ -150,7 +189,10 @@ def _upsert_crawl_state(conn: sqlite3.Connection, state) -> None:
     )
 
 
-def save_reviews_and_state(reviews: list[dict], package_id: str, state, db_path: str) -> int:
+def save_reviews_and_state(
+    reviews: list[dict], package_id: str, state, db_path: str,
+    *, job_id: str | None = None, worker_id: str | None = None,
+) -> int:
     """Persist a page of reviews and its crawl checkpoint in ONE transaction.
 
     The crawl cursor advances past a page as soon as it is fetched; committing
@@ -160,6 +202,16 @@ def save_reviews_and_state(reviews: list[dict], package_id: str, state, db_path:
     with sqlite3.connect(db_path) as conn:
         inserted = _upsert_reviews(conn, reviews, package_id)
         _upsert_crawl_state(conn, state)
+        if job_id:
+            where = "job_id=?" + (" AND worker_id=?" if worker_id else "")
+            args = [1, len(reviews), inserted, state.lang, "writing", _now(), job_id]
+            if worker_id:
+                args.append(worker_id)
+            conn.execute(
+                f"""UPDATE crawl_jobs SET pages_completed=pages_completed+?,
+                    fetched_count=fetched_count+?, inserted_count=inserted_count+?,
+                    last_lang=?, last_event=?, updated_at=? WHERE {where}""", args
+            )
         return inserted
 
 
@@ -282,3 +334,187 @@ def count_reviews(package_id: str, db_path: str) -> int:
     sql = "SELECT COUNT(*) FROM reviews WHERE package_id = ?"
     with sqlite3.connect(db_path) as conn:
         return conn.execute(sql, (package_id,)).fetchone()[0]
+
+
+# --- Durable crawl queue ---------------------------------------------------
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _job_from_row(row: sqlite3.Row) -> dict:
+    result = dict(row)
+    result["languages"] = json.loads(result.pop("languages_json") or "[]")
+    result["cancel_requested"] = bool(result["cancel_requested"])
+    return result
+
+
+def enqueue_job(
+    package_id: str,
+    db_path: str,
+    *,
+    app_name: str | None = None,
+    langs: list[str] | None = None,
+    country: str = "us",
+    count_per_lang: int | None = 1000,
+    delay: float = 1.0,
+    mode: str = "crawl",
+) -> str:
+    """Create an idempotent job; one active target may exist at a time."""
+    job_id = str(uuid.uuid4())
+    now = _now()
+    languages = langs or []
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """INSERT INTO crawl_jobs
+                (job_id, package_id, app_name, country, languages_json,
+                 count_per_lang, delay, mode, status, total_languages,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)""",
+                (job_id, package_id, app_name, country, json.dumps(languages),
+                 count_per_lang, delay, mode, len(languages), now, now),
+            )
+    except sqlite3.IntegrityError:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT job_id FROM crawl_jobs WHERE package_id=? AND country=? "
+                "AND status IN ('queued','running','retrying','waiting')",
+                (package_id, country),
+            ).fetchone()
+        if row:
+            return row[0]
+        raise
+    return job_id
+
+
+def get_job(job_id: str, db_path: str) -> dict | None:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM crawl_jobs WHERE job_id=?", (job_id,)).fetchone()
+    return _job_from_row(row) if row else None
+
+
+def list_jobs(db_path: str, *, limit: int = 100) -> list[dict]:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM crawl_jobs ORDER BY updated_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [_job_from_row(row) for row in rows]
+
+
+def claim_job(db_path: str, worker_id: str, lease_seconds: int = 90) -> dict | None:
+    """Atomically claim the oldest queued or lease-expired job."""
+    now = datetime.now(timezone.utc)
+    now_text = now.isoformat()
+    lease_text = (now + timedelta(seconds=lease_seconds)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """UPDATE crawl_jobs SET status='queued', worker_id=NULL,
+               lease_expires_at=NULL, heartbeat_at=NULL, updated_at=?
+               WHERE status='running' AND lease_expires_at IS NOT NULL
+               AND lease_expires_at < ?""", (now_text, now_text)
+        )
+        row = conn.execute(
+            """SELECT job_id FROM crawl_jobs
+               WHERE status IN ('queued','retrying')
+                 AND (next_retry_at IS NULL OR next_retry_at <= ?)
+               ORDER BY created_at LIMIT 1""", (now_text,)
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            """UPDATE crawl_jobs SET status='running', worker_id=?,
+               heartbeat_at=?, lease_expires_at=?, started_at=COALESCE(started_at,?),
+               updated_at=?, last_event='running'
+               WHERE job_id=?""",
+            (worker_id, now_text, lease_text, now_text, now_text, row[0]),
+        )
+        claimed = conn.execute("SELECT * FROM crawl_jobs WHERE job_id=?", (row[0],)).fetchone()
+    return _job_from_row(claimed)
+
+
+def heartbeat_job(job_id: str, db_path: str, worker_id: str, lease_seconds: int = 90) -> bool:
+    now = datetime.now(timezone.utc)
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """UPDATE crawl_jobs SET heartbeat_at=?, lease_expires_at=?, updated_at=?
+               WHERE job_id=? AND worker_id=? AND status='running'""",
+            (now.isoformat(), (now + timedelta(seconds=lease_seconds)).isoformat(),
+             now.isoformat(), job_id, worker_id),
+        )
+    return cur.rowcount == 1
+
+
+def update_job_progress(
+    job_id: str, db_path: str, *, worker_id: str | None = None,
+    lang: str | None = None, pages: int = 0, fetched: int = 0,
+    inserted: int = 0, languages_completed: int = 0, event: str = "writing",
+    status: str = "running", error_class: str | None = None,
+    error_msg: str | None = None, next_retry_at: str | None = None,
+) -> None:
+    now = _now()
+    where = "job_id=?" + (" AND worker_id=?" if worker_id else "")
+    args = [pages, fetched, inserted, languages_completed, lang, event, status,
+            error_class, error_msg, next_retry_at, now, job_id]
+    if worker_id:
+        args.append(worker_id)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            f"""UPDATE crawl_jobs SET pages_completed=pages_completed+?,
+                fetched_count=fetched_count+?, inserted_count=inserted_count+?,
+                languages_completed=languages_completed+?, last_lang=COALESCE(?,last_lang),
+                last_event=?, status=?, error_class=?, error_msg=?, next_retry_at=?,
+                updated_at=? WHERE {where}""", args
+        )
+
+
+def set_job_status(job_id: str, db_path: str, status: str, *, error_class=None,
+                   error_msg=None, event=None, next_retry_at=None) -> None:
+    now = _now()
+    finished = now if status in {"complete", "failed", "cancelled", "partial", "throttled"} else None
+    if status == "throttled" and next_retry_at is None:
+        next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """UPDATE crawl_jobs SET status=?, error_class=?, error_msg=?,
+               last_event=COALESCE(?, last_event), next_retry_at=?,
+               finished_at=COALESCE(?, finished_at), updated_at=? WHERE job_id=?""",
+            (status, error_class, error_msg, event, next_retry_at, finished, now, job_id),
+        )
+
+
+def request_job_cancel(job_id: str, db_path: str) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """UPDATE crawl_jobs SET cancel_requested=1,
+               status=CASE WHEN status IN ('queued','retrying') THEN 'cancelled' ELSE status END,
+               last_event=CASE WHEN status IN ('queued','retrying') THEN 'cancelled' ELSE 'cancelling' END,
+               finished_at=CASE WHEN status IN ('queued','retrying') THEN ? ELSE finished_at END,
+               updated_at=? WHERE job_id=? AND status IN ('queued','running','retrying','waiting')""",
+            (_now(), _now(), job_id),
+        )
+    return cur.rowcount == 1
+
+
+def retry_job(job_id: str, db_path: str) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """UPDATE crawl_jobs SET status='queued', cancel_requested=0,
+               error_class=NULL, error_msg=NULL, next_retry_at=NULL,
+               worker_id=NULL, lease_expires_at=NULL, updated_at=?, last_event='queued'
+               WHERE job_id=? AND status IN ('failed','cancelled','partial','throttled')""",
+            (_now(), job_id),
+        )
+    return cur.rowcount == 1
+
+
+def is_job_cancel_requested(job_id: str, db_path: str) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT cancel_requested FROM crawl_jobs WHERE job_id=?", (job_id,)
+        ).fetchone()
+    return bool(row and row[0])
