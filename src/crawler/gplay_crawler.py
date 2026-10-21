@@ -1,7 +1,7 @@
 """Crawl reviews from Google Play Store, paginating one page per request.
 
-Pagination deliberately bypasses google_play_scraper.reviews() and calls the
-lower-level _fetch_review_items directly. reviews() in the pinned 1.2.7:
+Pagination deliberately bypasses google_play_scraper.reviews() and uses the
+pinned response parser with bounded HTTP requests. reviews() in 1.2.7:
   - swallows fetch exceptions into token=None, making network errors/throttling
     indistinguishable from genuine end-of-data (silent truncation),
   - re-fetches in a zero-delay internal loop, so the caller never sees an
@@ -17,12 +17,9 @@ import logging
 import time
 from dataclasses import dataclass, asdict
 
-from google_play_scraper import Sort, app as gplay_app
-from google_play_scraper.constants.element import ElementSpecs
-from google_play_scraper.constants.request import Formats
-from google_play_scraper.exceptions import NotFoundError
-from google_play_scraper.features.reviews import _fetch_review_items
-from crawler.transport import fetch_reviews_page, classify_exception, Outcome
+from crawler.transport import (
+    fetch_reviews_page, fetch_app_details, classify_exception, Outcome, TransportError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +38,7 @@ PAGE_SIZE = 200
 
 # Wait times between retries when a page fetch fails or comes back empty while
 # the pagination cursor still points at more data (throttling, not end-of-data).
-BACKOFF_DELAYS = [5, 10, 20, 40, 60]
+BACKOFF_DELAYS = [2, 5, 10]
 
 
 @dataclass
@@ -55,6 +52,7 @@ class RequestEvent:
     page_size: int
     items_returned: int
     retry_delay: float = 0.0
+    phase: str = "finished"
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -68,8 +66,8 @@ class CrawlState:
       complete    — reached end of available reviews (or the requested cap)
       throttled   — page fetches kept failing or returning empty despite a
                     live cursor; data is PARTIAL, resume from `cursor` later
-      partial     — sync stopped at its page budget before reaching the known
-                    region; dataset is fresher but not caught up
+      partial     — network retries exhausted, or sync reached its page budget;
+                    saved data is resumable but not caught up
       error       — crawl aborted on an exception (see error_msg)
 
     `cursor` is Google's pagination cursor (plain string), kept at the last
@@ -92,10 +90,7 @@ def fetch_app_name(package_id: str, lang: str = "en", country: str = "us") -> st
     Raises ValueError when the package does not exist, so callers can show
     "app not found" instead of running a pointless crawl.
     """
-    try:
-        info = gplay_app(package_id, lang=lang, country=country)
-    except NotFoundError:
-        raise ValueError(f"App not found on Google Play: {package_id}")
+    info = fetch_app_details(package_id, lang=lang, country=country)
     return info.get("title", package_id)
 
 
@@ -145,6 +140,10 @@ def crawl_reviews_iter(
     cursor = state.cursor  # None = start from newest; set = resume from checkpoint
 
     while count is None or state.fetched < count:
+        if cancel_event is not None and cancel_event.is_set():
+            state.status = "cancelled"
+            state.error_msg = "cancel requested"
+            return
         page_size = PAGE_SIZE if count is None else min(PAGE_SIZE, count - state.fetched)
 
         # items stays None until a page yields data or a clean end-of-history;
@@ -153,6 +152,12 @@ def crawl_reviews_iter(
         last_error = None
         for attempt, wait in enumerate([0] + BACKOFF_DELAYS):
             if wait:
+                if request_callback:
+                    request_callback(RequestEvent(
+                        package_id, lang, country, attempt + 1,
+                        classify_exception(last_error).value if last_error else "throttled",
+                        0, page_size, 0, wait, "waiting",
+                    ).as_dict())
                 logger.warning(
                     "[%s/%s] %s: page fetch failed (%s) — retry %d/%d in %ds",
                     lang, country, package_id,
@@ -167,6 +172,11 @@ def crawl_reviews_iter(
                 else:
                     time.sleep(wait)
             started = time.monotonic()
+            if request_callback:
+                request_callback(RequestEvent(
+                    package_id, lang, country, attempt + 1, "requesting",
+                    0, page_size, 0, phase="started",
+                ).as_dict())
             try:
                 fetch_args = (package_id, lang, country, page_size, cursor)
                 if limiter is not None or cancel_event is not None:
@@ -175,12 +185,6 @@ def crawl_reviews_iter(
                     )
                 else:
                     items, next_cursor = _fetch_page(*fetch_args)
-                outcome = Outcome.SUCCESS.value if items or next_cursor is None else Outcome.THROTTLED.value
-                if request_callback:
-                    request_callback(RequestEvent(
-                        package_id, lang, country, attempt + 1, outcome,
-                        time.monotonic() - started, page_size, len(items), wait,
-                    ).as_dict())
             except Exception as e:
                 if isinstance(e, InterruptedError):
                     state.status = "cancelled"
@@ -194,19 +198,34 @@ def crawl_reviews_iter(
                         classify_exception(e).value, time.monotonic() - started,
                         page_size, 0, wait,
                     ).as_dict())
+                if isinstance(e, TransportError) and not e.retryable:
+                    state.status = "error"
+                    state.error_msg = str(e)
+                    return
                 continue
+            outcome = Outcome.SUCCESS.value if items or next_cursor is None else Outcome.THROTTLED.value
+            if request_callback:
+                request_callback(RequestEvent(
+                    package_id, lang, country, attempt + 1, outcome,
+                    time.monotonic() - started, page_size, len(items), wait,
+                ).as_dict())
             if items or next_cursor is None:
                 break  # got data, or clean end of history
             items = None  # empty page but cursor says more exists → retry
             last_error = None  # this attempt didn't raise; don't report a stale exception
 
         if items is None:
-            state.status = "throttled"
+            state.status = "partial" if last_error and classify_exception(last_error) == Outcome.NETWORK else "throttled"
             state.error_msg = str(last_error) if last_error else "empty pages with live cursor"
             return
 
         if not items:  # empty page with no cursor: clean end of history
             state.status = "complete"
+            return
+
+        if next_cursor is not None and next_cursor == cursor:
+            state.status = "throttled"
+            state.error_msg = "Google Play repeated the pagination cursor; retry later"
             return
 
         for r in items:
@@ -218,7 +237,7 @@ def crawl_reviews_iter(
 
         yield items
 
-        if cursor is None:
+        if cursor is None or (count is not None and state.fetched >= count):
             state.status = "complete"
             return
 
@@ -241,6 +260,8 @@ def sync_reviews_iter(
     state: CrawlState | None = None,
     max_pages: int | None = None,
     cancel_event=None,
+    limiter=None,
+    request_callback=None,
 ):
     """
     Yield newest-first pages until the dataset is caught up.
@@ -268,7 +289,7 @@ def sync_reviews_iter(
     pages_seen = 0
     for page in crawl_reviews_iter(
         package_id, count=None, lang=lang, country=country, delay=delay, state=state,
-        cancel_event=cancel_event,
+        cancel_event=cancel_event, limiter=limiter, request_callback=request_callback,
     ):
         known = known_count_fn([r.get("reviewId", "") for r in page]) if known_count_fn else 0
         consecutive_known = consecutive_known + 1 if known == len(page) else 0
@@ -295,7 +316,7 @@ def resume_or_fresh(prior, package_id: str, lang: str, country: str) -> CrawlSta
     errored crawls restart from the newest reviews instead — dedup and upsert
     make a restart cheap, and it picks up reviews posted since.
     """
-    if prior is not None and prior.cursor and prior.status in ("in_progress", "throttled"):
+    if prior is not None and prior.cursor and prior.status in ("in_progress", "throttled", "partial", "cancelled"):
         return prior
     return CrawlState(package_id, lang, country)
 

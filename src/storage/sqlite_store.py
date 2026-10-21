@@ -80,6 +80,12 @@ CREATE INDEX IF NOT EXISTS idx_crawl_jobs_lease
 CREATE UNIQUE INDEX IF NOT EXISTS idx_crawl_jobs_active_target
     ON crawl_jobs(package_id, country)
     WHERE status IN ('queued', 'running', 'retrying', 'waiting');
+CREATE TABLE IF NOT EXISTS crawl_job_languages (
+    job_id TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY (job_id, lang)
+);
 """
 
 # Columns added after the initial release; ALTER'd in on databases
@@ -192,6 +198,7 @@ def _upsert_crawl_state(conn: sqlite3.Connection, state) -> None:
 def save_reviews_and_state(
     reviews: list[dict], package_id: str, state, db_path: str,
     *, job_id: str | None = None, worker_id: str | None = None,
+    save_checkpoint: bool = True,
 ) -> int:
     """Persist a page of reviews and its crawl checkpoint in ONE transaction.
 
@@ -200,8 +207,12 @@ def save_reviews_and_state(
     failed to save. Returns number of newly inserted review rows.
     """
     with sqlite3.connect(db_path) as conn:
+        if job_id:
+            conn.execute("BEGIN IMMEDIATE")
+            _require_job_owner(conn, job_id, worker_id)
         inserted = _upsert_reviews(conn, reviews, package_id)
-        _upsert_crawl_state(conn, state)
+        if save_checkpoint:
+            _upsert_crawl_state(conn, state)
         if job_id:
             where = "job_id=?" + (" AND worker_id=?" if worker_id else "")
             args = [1, len(reviews), inserted, state.lang, "writing", _now(), job_id]
@@ -219,6 +230,41 @@ def save_crawl_state(state, db_path: str) -> None:
     """Upsert a crawl checkpoint on its own (e.g. terminal status with no page)."""
     with sqlite3.connect(db_path) as conn:
         _upsert_crawl_state(conn, state)
+
+
+def _require_job_owner(conn, job_id, worker_id):
+    row = conn.execute(
+        "SELECT worker_id, status FROM crawl_jobs WHERE job_id=?", (job_id,),
+    ).fetchone()
+    if not row or row[1] not in {"running", "waiting"} or (worker_id and row[0] != worker_id):
+        raise InterruptedError("job lease no longer owned by this worker")
+
+
+def completed_job_languages(job_id: str, db_path: str) -> set[str]:
+    with sqlite3.connect(db_path) as conn:
+        return {row[0] for row in conn.execute(
+            "SELECT lang FROM crawl_job_languages WHERE job_id=? AND status='complete'",
+            (job_id,),
+        )}
+
+
+def finish_job_language(job_id, state, db_path, worker_id, *, save_checkpoint=True):
+    """Checkpoint language completion and its progress exactly once per job."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _require_job_owner(conn, job_id, worker_id)
+        if save_checkpoint:
+            _upsert_crawl_state(conn, state)
+        conn.execute(
+            "INSERT OR REPLACE INTO crawl_job_languages (job_id, lang, status) VALUES (?, ?, ?)",
+            (job_id, state.lang, state.status),
+        )
+        conn.execute(
+            """UPDATE crawl_jobs SET languages_completed=(
+                SELECT COUNT(*) FROM crawl_job_languages WHERE job_id=? AND status='complete'
+            ), last_lang=?, last_event=?, status='running', updated_at=? WHERE job_id=?""",
+            (job_id, state.lang, state.status, _now(), job_id),
+        )
 
 
 def load_crawl_state(package_id: str, lang: str, country: str, db_path: str):
@@ -315,6 +361,7 @@ def save_app_name(package_id: str, app_name: str, db_path: str) -> None:
             "INSERT OR REPLACE INTO apps (package_id, app_name) VALUES (?, ?)",
             (package_id, app_name),
         )
+        conn.execute("UPDATE crawl_jobs SET app_name=? WHERE package_id=?", (app_name, package_id))
 
 
 def list_packages_with_names(db_path: str) -> list[tuple[str, str]]:
@@ -363,7 +410,12 @@ def enqueue_job(
     """Create an idempotent job; one active target may exist at a time."""
     job_id = str(uuid.uuid4())
     now = _now()
-    languages = langs or []
+    if not langs:
+        from crawler.gplay_crawler import ALL_LANGUAGES
+        languages = list_stored_langs(package_id, db_path) if mode == "sync" else []
+        languages = languages or ALL_LANGUAGES
+    else:
+        languages = list(dict.fromkeys(langs))
     try:
         with sqlite3.connect(db_path) as conn:
             conn.execute(
@@ -412,12 +464,44 @@ def claim_job(db_path: str, worker_id: str, lease_seconds: int = 90) -> dict | N
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            """UPDATE crawl_jobs SET status='queued', worker_id=NULL,
-               lease_expires_at=NULL, heartbeat_at=NULL, updated_at=?
-               WHERE status='running' AND lease_expires_at IS NOT NULL
-               AND lease_expires_at < ?""", (now_text, now_text)
-        )
+        expired = conn.execute(
+            """SELECT * FROM crawl_jobs WHERE lease_expires_at < ? AND (
+                status IN ('running','waiting') OR
+                (status IN ('complete','throttled','error') AND finished_at IS NULL)
+            )""", (now_text,),
+        ).fetchall()
+        for prior in expired:
+            # Older workers published a language's terminal state on the job
+            # itself. finished_at=NULL distinguishes that bug from a finished job.
+            conflict = conn.execute(
+                """SELECT 1 FROM crawl_jobs WHERE package_id=? AND country=? AND job_id!=?
+                   AND status IN ('queued','running','retrying','waiting')""",
+                (prior["package_id"], prior["country"], prior["job_id"]),
+            ).fetchone()
+            if conflict:
+                continue
+            has_ledger = conn.execute(
+                "SELECT 1 FROM crawl_job_languages WHERE job_id=?", (prior["job_id"],),
+            ).fetchone()
+            if not has_ledger and prior["mode"] == "crawl":
+                # Adopt only checkpoints written during this legacy job, never
+                # completion records belonging to an earlier or later crawl.
+                langs = json.loads(prior["languages_json"] or "[]")
+                for checkpoint in conn.execute(
+                    """SELECT lang FROM crawl_state WHERE package_id=? AND country=?
+                       AND status='complete' AND updated_at>=? AND updated_at<=?""",
+                    (prior["package_id"], prior["country"], prior["started_at"] or prior["created_at"], prior["updated_at"]),
+                ).fetchall():
+                    if not langs or checkpoint["lang"] in langs:
+                        conn.execute(
+                            "INSERT INTO crawl_job_languages VALUES (?, ?, 'complete')",
+                            (prior["job_id"], checkpoint["lang"]),
+                        )
+            conn.execute(
+                """UPDATE crawl_jobs SET status='queued', worker_id=NULL,
+                   lease_expires_at=NULL, heartbeat_at=NULL, updated_at=? WHERE job_id=?""",
+                (now_text, prior["job_id"]),
+            )
         row = conn.execute(
             """SELECT job_id FROM crawl_jobs
                WHERE status IN ('queued','retrying')
@@ -429,7 +513,9 @@ def claim_job(db_path: str, worker_id: str, lease_seconds: int = 90) -> dict | N
         conn.execute(
             """UPDATE crawl_jobs SET status='running', worker_id=?,
                heartbeat_at=?, lease_expires_at=?, started_at=COALESCE(started_at,?),
-               updated_at=?, last_event='running'
+               updated_at=?, last_event='running', finished_at=NULL, next_retry_at=NULL,
+               languages_completed=(SELECT COUNT(*) FROM crawl_job_languages
+                   WHERE job_id=crawl_jobs.job_id AND status='complete')
                WHERE job_id=?""",
             (worker_id, now_text, lease_text, now_text, now_text, row[0]),
         )
@@ -442,7 +528,7 @@ def heartbeat_job(job_id: str, db_path: str, worker_id: str, lease_seconds: int 
     with sqlite3.connect(db_path) as conn:
         cur = conn.execute(
             """UPDATE crawl_jobs SET heartbeat_at=?, lease_expires_at=?, updated_at=?
-               WHERE job_id=? AND worker_id=? AND status='running'""",
+               WHERE job_id=? AND worker_id=? AND status IN ('running','waiting')""",
             (now.isoformat(), (now + timedelta(seconds=lease_seconds)).isoformat(),
              now.isoformat(), job_id, worker_id),
         )
@@ -457,7 +543,7 @@ def update_job_progress(
     error_msg: str | None = None, next_retry_at: str | None = None,
 ) -> None:
     now = _now()
-    where = "job_id=?" + (" AND worker_id=?" if worker_id else "")
+    where = "job_id=?" + (" AND worker_id=? AND status IN ('running','waiting')" if worker_id else "")
     args = [pages, fetched, inserted, languages_completed, lang, event, status,
             error_class, error_msg, next_retry_at, now, job_id]
     if worker_id:
@@ -473,17 +559,20 @@ def update_job_progress(
 
 
 def set_job_status(job_id: str, db_path: str, status: str, *, error_class=None,
-                   error_msg=None, event=None, next_retry_at=None) -> None:
+                   error_msg=None, event=None, next_retry_at=None, worker_id=None) -> None:
     now = _now()
     finished = now if status in {"complete", "failed", "cancelled", "partial", "throttled"} else None
     if status == "throttled" and next_retry_at is None:
         next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()
     with sqlite3.connect(db_path) as conn:
+        where = "job_id=?" + (" AND worker_id=? AND status IN ('running','waiting')" if worker_id else "")
+        args = [status, error_class, error_msg, event, next_retry_at, finished, now, job_id]
+        if worker_id:
+            args.append(worker_id)
         conn.execute(
-            """UPDATE crawl_jobs SET status=?, error_class=?, error_msg=?,
+            f"""UPDATE crawl_jobs SET status=?, error_class=?, error_msg=?,
                last_event=COALESCE(?, last_event), next_retry_at=?,
-               finished_at=COALESCE(?, finished_at), updated_at=? WHERE job_id=?""",
-            (status, error_class, error_msg, event, next_retry_at, finished, now, job_id),
+               finished_at=COALESCE(?, finished_at), updated_at=? WHERE {where}""", args,
         )
 
 
@@ -505,8 +594,12 @@ def retry_job(job_id: str, db_path: str) -> bool:
         cur = conn.execute(
             """UPDATE crawl_jobs SET status='queued', cancel_requested=0,
                error_class=NULL, error_msg=NULL, next_retry_at=NULL,
-               worker_id=NULL, lease_expires_at=NULL, updated_at=?, last_event='queued'
-               WHERE job_id=? AND status IN ('failed','cancelled','partial','throttled')""",
+               worker_id=NULL, lease_expires_at=NULL, heartbeat_at=NULL, finished_at=NULL,
+               retry_count=retry_count+1, updated_at=?, last_event='queued'
+               WHERE job_id=? AND status IN ('failed','cancelled','partial','throttled')
+               AND NOT EXISTS (SELECT 1 FROM crawl_jobs active
+                   WHERE active.package_id=crawl_jobs.package_id AND active.country=crawl_jobs.country
+                   AND active.status IN ('queued','running','retrying','waiting'))""",
             (_now(), job_id),
         )
     return cur.rowcount == 1

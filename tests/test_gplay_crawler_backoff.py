@@ -106,10 +106,11 @@ def test_request_callback_contains_timing_and_outcome(monkeypatch, sleeps):
     monkeypatch.setattr(gc, "_fetch_page", lambda *a, **k: (_page(2), None))
     state = gc.CrawlState("com.x", "en", "us")
     list(gc.crawl_reviews_iter("com.x", count=2, state=state, request_callback=events.append))
-    assert events[0]["outcome"] == "success"
-    assert events[0]["items_returned"] == 2
-    assert events[0]["elapsed_seconds"] >= 0
-    assert "content" not in events[0]
+    assert events[0]["phase"] == "started"
+    assert events[-1]["outcome"] == "success"
+    assert events[-1]["items_returned"] == 2
+    assert events[-1]["elapsed_seconds"] >= 0
+    assert all("content" not in event for event in events)
 
 
 def test_cancel_event_interrupts_retry_backoff(monkeypatch, sleeps):
@@ -172,3 +173,52 @@ def test_on_batch_failure_propagates_as_fatal(monkeypatch, sleeps):
 
     with pytest.raises(OSError):
         gc.crawl_reviews_all_languages("com.x", on_batch=broken_sink)
+
+
+def test_repeated_cursor_stops_without_infinite_pagination(monkeypatch, sleeps):
+    pages, state, _ = _run(monkeypatch, [(_page(2), "same"), (_page(2), "same")], count=None)
+    assert len(pages) == 1
+    assert state.status == "throttled"
+    assert state.cursor == "same"
+
+
+def test_wait_event_is_emitted_before_backoff(monkeypatch):
+    events = []
+    sleeps = []
+    sequence = iter([ConnectionError("outage"), (_page(1), None)])
+
+    def fetch(*args):
+        result = next(sequence)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def sleep(seconds):
+        assert events[-1]["phase"] == "waiting"
+        assert events[-1]["retry_delay"] == seconds
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(gc, "_fetch_page", fetch)
+    monkeypatch.setattr(gc.time, "sleep", sleep)
+    list(gc.crawl_reviews_iter("com.x", count=1, request_callback=events.append))
+    assert sleeps == [gc.BACKOFF_DELAYS[0]]
+
+
+def test_terminal_transport_error_does_not_retry(monkeypatch, sleeps):
+    from crawler.transport import TransportError, Outcome
+    pages, state, sizes = _run(monkeypatch, [TransportError(Outcome.NOT_FOUND, "404")])
+    assert state.status == "error"
+    assert len(sizes) == 1
+    assert sleeps == []
+
+
+def test_progress_storage_failure_is_not_retried_as_network_error(monkeypatch, sleeps):
+    monkeypatch.setattr(gc, "_fetch_page", lambda *a: (_page(1), None))
+
+    def broken_progress(event):
+        if event["phase"] == "finished":
+            raise OSError("disk full")
+
+    with pytest.raises(OSError, match="disk full"):
+        list(gc.crawl_reviews_iter("com.x", request_callback=broken_progress))
+    assert sleeps == []

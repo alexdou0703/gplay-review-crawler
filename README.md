@@ -13,6 +13,8 @@ Crawl Google Play reviews into a local SQLite workspace for product analysis. Me
 - Durable multi-app queue with cancellation, retry, lease recovery, and per-page checkpoints
 - A separate worker keeps the Streamlit tab interactive; default worker concurrency is two apps
 - Shared request pacing and typed rate-limit/network status reporting
+- HTTP requests use a 20-second socket timeout, with three visible retries (2/5/10 seconds) and no nested library retries
+- Queue progress shows current language, saved pages, fetched reviews, and retry countdowns; Retry skips languages already completed by that job
 
 ## Run the UI and worker
 
@@ -28,9 +30,15 @@ Queue one or more apps from the UI, one per line. The browser remains available 
 results and queue controls while the worker crawls. SQLite and the worker are a
 single-host deployment model; they are not a distributed scheduler.
 
-The Streamlit-hosted demo starts one embedded worker automatically because the
+The Streamlit-hosted demo starts an embedded worker with two app slots automatically because the
 hosting service runs only the UI process. For local production-style operation,
 set `MERICRAWLER_EMBED_WORKER=0` and run the separate worker command above.
+
+After upgrading, restart both the UI and any separate worker. Expired running or
+waiting jobs are recovered automatically (default lease: 90 seconds). Legacy jobs
+incorrectly marked complete between languages are also recovered if they have no
+finish timestamp. Retry keeps completed languages for the same job; queue a new
+crawl or sync when you want to refresh those languages.
 
 ## Full crawls (CLI)
 
@@ -58,6 +66,9 @@ from the UI and retried after a partial or throttled result.
 ## Storage
 
 SQLite at `data/reviews.db` (WAL mode, so the UI can read while a crawl writes). On read-only filesystems such as Streamlit Cloud it falls back to `/tmp/reviews.db`, which is **ephemeral and shared by every visitor of that deployment** — treat cloud deploys as demos, run real crawls locally.
+
+Use `MERICRAWLER_DB_PATH` to override the UI database path; pass that same path as
+`--db` if running a separate worker.
 
 Back up a database by copying it while the worker is stopped, or use SQLite's
 backup tooling. Migrations are additive and run automatically when the UI, CLI,

@@ -3,6 +3,7 @@
 import sys
 import os
 import threading
+from datetime import datetime, timezone
 from html import escape as html_escape
 
 # Ensure src/ is in path for local imports
@@ -12,7 +13,7 @@ import streamlit as st
 import pandas as pd
 
 from crawler.url_parser import parse_package_id, parse_url
-from crawler.gplay_crawler import ALL_LANGUAGES, fetch_app_name
+from crawler.gplay_crawler import ALL_LANGUAGES
 from storage.sqlite_store import (
     init_db, get_reviews, count_reviews, save_app_name, list_packages_with_names,
     delete_package, enqueue_job, list_jobs, request_job_cancel, retry_job,
@@ -24,7 +25,9 @@ from ui_styles import MERICRAWLER_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOT
 
 # --- Config ---
 # Try local data/ dir first; fall back to /tmp on read-only cloud filesystems (Streamlit Cloud)
-_local_db = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "reviews.db"))
+_local_db = os.path.abspath(os.getenv(
+    "MERICRAWLER_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "reviews.db")
+))
 try:
     os.makedirs(os.path.dirname(_local_db), exist_ok=True)
     DB_PATH = _local_db
@@ -53,7 +56,7 @@ def start_embedded_worker(db_path: str):
         target=run_worker,
         kwargs={
             "db_path": db_path,
-            "workers": 1,
+            "workers": 2,
             "min_request_interval": 1.0,
             "poll_interval": 1.0,
             "stop_event": stop_event,
@@ -67,7 +70,9 @@ def start_embedded_worker(db_path: str):
 
 
 if os.getenv("MERICRAWLER_EMBED_WORKER", "1") == "1":
-    start_embedded_worker(DB_PATH)
+    if not start_embedded_worker(DB_PATH).is_alive():
+        start_embedded_worker.clear()
+        start_embedded_worker(DB_PATH)
 
 # --- Sidebar: previously crawled apps ---
 st.sidebar.title("Crawled Apps")
@@ -155,7 +160,8 @@ if crawl_btn and user_input.strip():
             else:
                 pkg_id = parse_package_id(raw_input)
             country = detected_country or "us"
-            app_title = fetch_app_name(pkg_id, country=country)
+            # URLs/package IDs can be queued without waiting on Google metadata.
+            app_title = dict(pkg_entries).get(pkg_id, pkg_id)
             save_app_name(pkg_id, app_title, DB_PATH)
             job_id = enqueue_job(
                 pkg_id, DB_PATH, app_name=app_title, langs=selected_langs,
@@ -194,6 +200,7 @@ def render_queue_panel():
     if not jobs:
         st.info("No jobs queued. Start with one or more apps above.")
     else:
+        st.caption("Progress counts completed languages. Pages and fetched reviews update while each language runs.")
         for job in jobs:
             label = job.get("app_name") or job["package_id"]
             status = display_status(job["status"])
@@ -208,6 +215,10 @@ def render_queue_panel():
                 )
             with middle:
                 st.progress(progress, text=f"{done}/{total} languages · {job['inserted_count']:,} new rows")
+                st.caption(
+                    f"Language: {job['last_lang'] or '—'} · "
+                    f"{job['pages_completed']:,} pages saved · {job['fetched_count']:,} reviews fetched"
+                )
             with right:
                 if job["status"] in {"queued", "running", "retrying", "waiting"}:
                     if st.button("Cancel", key=f"cancel_{job['job_id']}"):
@@ -219,8 +230,15 @@ def render_queue_panel():
                         st.rerun()
             if job.get("error_msg"):
                 st.caption(f"Reason: {job['error_msg']}")
-            if job.get("next_retry_at") and job["status"] in {"throttled", "retrying"}:
-                st.caption(f"Suggested next retry: {job['next_retry_at']}")
+            if job.get("next_retry_at") and job["status"] == "waiting":
+                remaining = max(0, int((datetime.fromisoformat(job["next_retry_at"]) - datetime.now(timezone.utc)).total_seconds()))
+                st.caption(f"Retrying request in {remaining}s. Saved pages are kept.")
+            elif job["status"] in {"throttled", "partial", "failed"}:
+                st.caption("Retry resumes unfinished languages; completed languages and saved reviews are kept.")
+            if job["status"] in {"running", "waiting"} and job.get("heartbeat_at"):
+                heartbeat_age = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(job["heartbeat_at"])).total_seconds()))
+                if heartbeat_age > 15:
+                    st.warning(f"Worker last responded {heartbeat_age}s ago. An expired job will resume when a worker is available.")
 
 
 render_queue_panel()
