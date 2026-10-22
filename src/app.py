@@ -3,7 +3,6 @@
 import sys
 import os
 import threading
-from datetime import datetime, timezone
 from html import escape as html_escape
 
 # Ensure src/ is in path for local imports
@@ -16,9 +15,9 @@ from crawler.url_parser import parse_package_id, parse_url
 from crawler.gplay_crawler import ALL_LANGUAGES
 from storage.sqlite_store import (
     init_db, get_reviews, count_reviews, save_app_name, list_packages_with_names,
-    delete_package, enqueue_job, list_jobs, request_job_cancel, retry_job,
+    delete_package, enqueue_job, latest_package_job, app_library_summary,
 )
-from crawl_jobs import display_status
+from queue_ui import render_queue, open_reviews
 from crawl_worker import run_worker
 from analysis_ui import render_analysis_tab
 from ui_styles import MERICRAWLER_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
@@ -48,6 +47,15 @@ st.markdown(FOOTER_CSS_EXTRA, unsafe_allow_html=True)
 init_db(DB_PATH)
 
 
+def remember_review_filters():
+    """Keep preferences when Streamlit removes widgets on the Crawl screen."""
+    st.session_state.review_filters = {
+        "review_search": st.session_state.get("review_search", ""),
+        **{f"star_filter_{star}": st.session_state.get(f"star_filter_{star}", True)
+           for star in range(1, 6)},
+    }
+
+
 @st.cache_resource(show_spinner=False)
 def start_embedded_worker(db_path: str):
     """Keep the hosted demo usable when Streamlit has no second process."""
@@ -69,13 +77,14 @@ def start_embedded_worker(db_path: str):
     return worker
 
 
-if os.getenv("MERICRAWLER_EMBED_WORKER", "1") == "1":
+PREVIEW_MODE = os.getenv("MERICRAWLER_PREVIEW", "0") == "1"
+if not PREVIEW_MODE and os.getenv("MERICRAWLER_EMBED_WORKER", "1") == "1":
     if not start_embedded_worker(DB_PATH).is_alive():
         start_embedded_worker.clear()
         start_embedded_worker(DB_PATH)
 
 # --- Sidebar: previously crawled apps ---
-st.sidebar.title("Crawled Apps")
+st.sidebar.title("Saved apps")
 pkg_entries = list_packages_with_names(DB_PATH)
 sync_target = None  # (pkg, name) — sync runs AFTER the loop so its spinner gets full sidebar width
 if pkg_entries:
@@ -84,13 +93,12 @@ if pkg_entries:
         col_open, col_sync, col_del = st.sidebar.columns([3.2, 0.9, 0.9])
         with col_open:
             if st.button(f"{entry_name}  ({n:,})", key=f"sidebar_{entry_pkg}"):
-                st.session_state.current_package_id = entry_pkg
-                st.session_state.current_df = get_reviews(entry_pkg, DB_PATH)
+                open_reviews(entry_pkg)
         with col_sync:
             if st.button("↻", key=f"sync_{entry_pkg}", help="Fetch reviews posted since the last crawl"):
                 sync_target = (entry_pkg, entry_name)
         with col_del:
-            if st.button("🗑", key=f"del_{entry_pkg}", help="Delete this app and all its reviews"):
+            if st.button("×", key=f"del_{entry_pkg}", help="Delete this app and all its reviews"):
                 st.session_state.confirm_delete = entry_pkg
                 st.rerun()
 
@@ -105,7 +113,7 @@ if pkg_entries:
                     st.session_state.pop("current_df", None)
                 st.session_state.pop("confirm_delete", None)
                 st.session_state.last_crawl_summary = (
-                    "success", f"Deleted <strong>{entry_name}</strong> ({deleted:,} reviews)"
+                    "success", f"Deleted <strong>{html_escape(entry_name)}</strong> ({deleted:,} reviews)"
                 )
                 st.rerun()
             if col_no.button("Cancel", key=f"del_no_{entry_pkg}"):
@@ -118,66 +126,103 @@ if sync_target:
     sync_pkg, sync_name = sync_target
     enqueue_job(sync_pkg, DB_PATH, app_name=sync_name, mode="sync", langs=[])
     st.session_state.last_crawl_summary = (
-        "success", f"Queued incremental sync for <strong>{sync_name}</strong>."
+        "success", f"Queued incremental sync for <strong>{html_escape(sync_name)}</strong>."
     )
     st.session_state.current_package_id = sync_pkg
+    st.session_state.workspace_view = "Crawl"
     st.rerun()
 
 # --- Main panel ---
 st.markdown(BRAND_HEADER_HTML, unsafe_allow_html=True)
-st.title("Mericrawler")
-st.caption("Queue Google Play review crawls, then inspect fresh results while the worker runs.")
+workspace_view = st.radio("Workspace", ["Crawl", "Apps", "Insights"], horizontal=True, key="workspace_view", label_visibility="collapsed")
 
-with st.form("queue_crawl_form"):
-    user_input = st.text_area(
-        "Apps to queue (one URL, package ID, or app name per line)",
-        placeholder="com.roblox.client\nhttps://play.google.com/store/apps/details?id=com.example.app&gl=vn",
-        height=100,
-    )
-    col1, col2, col3 = st.columns([4, 1, 1])
-    with col1:
-        lang_options = ["All languages"] + ALL_LANGUAGES
-        lang = st.selectbox("Language", lang_options, index=0)
-    with col2:
-        count_choice = st.selectbox("Max reviews / language", [100, 200, 500, 1000, "Full history"], index=1)
-    with col3:
-        delay = st.number_input("Page delay (s)", min_value=0.0, value=1.0, step=0.25)
-    # Form widgets only publish their values when the form is submitted. Do not
-    # derive the submit button's disabled state from `user_input`, otherwise the
-    # button stays disabled while the user is typing and can never submit.
-    crawl_btn = st.form_submit_button("Queue crawl", type="primary")
+if workspace_view == "Apps":
+    st.title("Apps")
+    st.caption("Your Google Play review library. Search an app and open its reviews or analytics.")
+    library = app_library_summary(DB_PATH)
+    query = st.text_input("Search apps", placeholder="Search by app name or package ID", key="library_search")
+    if query.strip():
+        library = library[library["app_name"].str.contains(query.strip(), case=False, regex=False) |
+                          library["package_id"].str.contains(query.strip(), case=False, regex=False)]
+    if library.empty:
+        st.info("No apps match this search." if query.strip() else "Your library is empty. Add Google Play links in Crawl to get started.")
+    else:
+        st.caption(f"{len(library):,} apps · {int(library['reviews'].sum()):,} saved reviews")
+        picker, action = st.columns([5, 1], vertical_alignment="bottom")
+        names = library.set_index("package_id")["app_name"].to_dict()
+        with picker:
+            selected = st.selectbox("Open app", list(names), format_func=lambda p: f"{names[p]} · {p}", key="library_picker")
+        with action:
+            st.button("Open insights", type="primary", on_click=open_reviews, args=(selected,))
+        library_display = library.copy()
+        library_display["last_saved"] = pd.to_datetime(library_display["last_saved"], utc=True).dt.strftime("%Y-%m-%d %H:%M")
+        st.dataframe(library_display.rename(columns={"app_name": "App", "package_id": "Package ID", "reviews": "Reviews",
+                     "average_rating": "Average rating", "languages": "Languages", "last_saved": "Last saved (UTC)"}),
+                     column_order=["App", "Package ID", "Reviews", "Average rating", "Languages", "Last saved (UTC)"],
+                     column_config={"Average rating": st.column_config.NumberColumn(format="%.2f"),
+                                    "Reviews": st.column_config.NumberColumn(format="%d")},
+                     hide_index=True, use_container_width=True, height=min(600, 40 + len(library) * 36))
 
-if crawl_btn and user_input.strip():
-    queued = []
-    errors = []
-    selected_langs = ALL_LANGUAGES if lang == "All languages" else [lang]
-    count = None if count_choice == "Full history" else count_choice
-    for raw_input in [line.strip() for line in user_input.splitlines() if line.strip()]:
-        try:
-            detected_country = None
-            if "play.google.com" in raw_input:
-                pkg_id, detected_country = parse_url(raw_input)
-            else:
-                pkg_id = parse_package_id(raw_input)
-            country = detected_country or "us"
-            # URLs/package IDs can be queued without waiting on Google metadata.
-            app_title = dict(pkg_entries).get(pkg_id, pkg_id)
-            save_app_name(pkg_id, app_title, DB_PATH)
-            job_id = enqueue_job(
-                pkg_id, DB_PATH, app_name=app_title, langs=selected_langs,
-                country=country, count_per_lang=count, delay=delay,
-            )
-            queued.append(f"{app_title} ({job_id[:8]})")
-            st.session_state.current_package_id = pkg_id
-        except Exception as exc:
-            errors.append(f"{raw_input}: {exc}")
-    if queued:
-        st.session_state.last_crawl_summary = ("success", "Queued: " + ", ".join(queued))
-    if errors:
-        st.session_state.last_crawl_summary = ("warning", "Could not queue: " + "; ".join(errors))
-    st.rerun()
-elif crawl_btn:
-    st.session_state.last_crawl_summary = ("warning", "Enter at least one Google Play URL or package ID.")
+if workspace_view == "Crawl":
+    st.title("Crawl workspace")
+    st.markdown("Add your apps below, then follow their progress in the crawl queue.")
+    with st.form("queue_crawl_form"):
+        st.markdown('<div class="crawl-section-heading crawl-form-heading"><span class="crawl-step">1</span>'
+                    '<div><h2>Add apps to crawl</h2><p>Paste your apps, choose the review limit, then add them to the queue.</p></div></div>',
+                    unsafe_allow_html=True)
+        user_input = st.text_area(
+            "Google Play apps",
+            placeholder="com.roblox.client\nhttps://play.google.com/store/apps/details?id=com.example.app&gl=vn",
+            height=120,
+        )
+        st.caption("One Google Play link, package ID, or app name per line.")
+        col1, col2 = st.columns(2)
+        with col1:
+            lang_options = ["All languages"] + ALL_LANGUAGES
+            lang = st.selectbox("Language", lang_options, index=0)
+        with col2:
+            count_choice = st.selectbox("Max reviews / language", [100, 200, 500, 1000, "Full history"], index=1)
+        with st.expander("Advanced settings · request delay"):
+            delay = st.number_input("Page delay (s)", min_value=0.0, value=1.0, step=0.25)
+            st.caption("Pause between pages. A longer delay reduces request frequency.")
+        # Form widgets only publish their values when the form is submitted. Do not
+        # derive the submit button's disabled state from `user_input`, otherwise the
+        # button stays disabled while the user is typing and can never submit.
+        crawl_btn = st.form_submit_button("Add to crawl queue", type="primary", use_container_width=True)
+        st.caption("Preview only: add apps to the sample queue; live crawling is off." if PREVIEW_MODE else
+                   "Apps start automatically when a crawl slot opens. Follow their status below.")
+
+    if crawl_btn and user_input.strip():
+        queued = []
+        errors = []
+        selected_langs = ALL_LANGUAGES if lang == "All languages" else [lang]
+        count = None if count_choice == "Full history" else count_choice
+        for raw_input in [line.strip() for line in user_input.splitlines() if line.strip()]:
+            try:
+                detected_country = None
+                if "play.google.com" in raw_input:
+                    pkg_id, detected_country = parse_url(raw_input)
+                else:
+                    pkg_id = parse_package_id(raw_input)
+                country = detected_country or "us"
+                # URLs/package IDs can be queued without waiting on Google metadata.
+                app_title = dict(pkg_entries).get(pkg_id, pkg_id)
+                save_app_name(pkg_id, app_title, DB_PATH)
+                job_id = enqueue_job(
+                    pkg_id, DB_PATH, app_name=app_title, langs=selected_langs,
+                    country=country, count_per_lang=count, delay=delay,
+                )
+                queued.append(f"{app_title} ({job_id[:8]})")
+                st.session_state.current_package_id = pkg_id
+            except Exception as exc:
+                errors.append(f"{raw_input}: {exc}")
+        if queued:
+            st.session_state.last_crawl_summary = ("success", "Added to queue: " + html_escape(", ".join(queued)))
+        if errors:
+            st.session_state.last_crawl_summary = ("warning", ("Added to queue: " + html_escape(", ".join(queued)) + ". " if queued else "") + "Could not queue: " + html_escape("; ".join(errors)))
+        st.rerun()
+    elif crawl_btn:
+        st.session_state.last_crawl_summary = ("warning", "Enter at least one Google Play URL or package ID.")
 
 # Outcome of the previous crawl run (stashed before st.rerun above)
 if "last_crawl_summary" in st.session_state:
@@ -191,153 +236,138 @@ _fragment = st.fragment(run_every="5s") if hasattr(st, "fragment") else (lambda 
 
 @_fragment
 def render_queue_panel():
-    st.divider()
-    st.subheader("Crawl queue")
-    if not hasattr(st, "fragment"):
-        if st.button("Refresh queue"):
-            st.rerun()
-    jobs = list_jobs(DB_PATH, limit=50)
-    if not jobs:
-        st.info("No jobs queued. Start with one or more apps above.")
+    render_queue(DB_PATH, preview_mode=PREVIEW_MODE)
+
+
+if workspace_view == "Crawl":
+    with st.container(border=True):
+        render_queue_panel()
+
+if workspace_view == "Insights":
+    st.title("App insights")
+    # --- Results ---
+    options = dict(pkg_entries)
+    current = st.session_state.get("current_package_id", "")
+    if current:
+        options.setdefault(current, current)
+    picker_col, refresh_col = st.columns([5, 1], vertical_alignment="bottom")
+    if options:
+        if st.session_state.get("result_picker") not in options:
+            st.session_state.result_picker = current or next(iter(options))
+        with picker_col:
+            pkg = st.selectbox("App to explore", list(options), format_func=lambda package: options[package], key="result_picker")
+        st.session_state.current_package_id = pkg
     else:
-        st.caption("Progress counts completed languages. Pages and fetched reviews update while each language runs.")
-        for job in jobs:
-            label = job.get("app_name") or job["package_id"]
-            status = display_status(job["status"])
-            done = job["languages_completed"]
-            total = job["total_languages"] or len(job["languages"]) or 1
-            progress = min(1.0, done / total)
-            left, middle, right = st.columns([4, 3, 1])
-            with left:
-                st.markdown(
-                    f"**{label}**  \n"
-                    f"`{job['package_id']}` · **{status}** · {job['last_event'] or 'queued'}"
-                )
-            with middle:
-                st.progress(progress, text=f"{done}/{total} languages · {job['inserted_count']:,} new rows")
-                st.caption(
-                    f"Language: {job['last_lang'] or '—'} · "
-                    f"{job['pages_completed']:,} pages saved · {job['fetched_count']:,} reviews fetched"
-                )
-            with right:
-                if job["status"] in {"queued", "running", "retrying", "waiting"}:
-                    if st.button("Cancel", key=f"cancel_{job['job_id']}"):
-                        request_job_cancel(job["job_id"], DB_PATH)
-                        st.rerun()
-                elif job["status"] in {"failed", "cancelled", "partial", "throttled"}:
-                    if st.button("Retry", key=f"retry_{job['job_id']}"):
-                        retry_job(job["job_id"], DB_PATH)
-                        st.rerun()
-            if job.get("error_msg"):
-                st.caption(f"Reason: {job['error_msg']}")
-            if job.get("next_retry_at") and job["status"] == "waiting":
-                remaining = max(0, int((datetime.fromisoformat(job["next_retry_at"]) - datetime.now(timezone.utc)).total_seconds()))
-                st.caption(f"Retrying request in {remaining}s. Saved pages are kept.")
-            elif job["status"] in {"throttled", "partial", "failed"}:
-                st.caption("Retry resumes unfinished languages; completed languages and saved reviews are kept.")
-            if job["status"] in {"running", "waiting"} and job.get("heartbeat_at"):
-                heartbeat_age = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(job["heartbeat_at"])).total_seconds()))
-                if heartbeat_age > 15:
-                    st.warning(f"Worker last responded {heartbeat_age}s ago. An expired job will resume when a worker is available.")
+        pkg = ""
+    if refresh_col.button("Refresh results", key="refresh_results"):
+        st.rerun()
+    latest_job = latest_package_job(pkg, DB_PATH) if pkg else None
+    if latest_job:
+        if latest_job["status"] in {"queued", "running", "waiting", "retrying"}:
+            st.info("This app has an active crawl. These results are a saved snapshot; use Refresh results to load newly saved reviews.")
+        elif latest_job["status"] in {"partial", "throttled", "failed", "cancelled"}:
+            st.warning("This crawl is incomplete. You can explore saved reviews now, or use Retry in Crawl to continue unfinished languages.")
+    df: pd.DataFrame = get_reviews(pkg, DB_PATH) if pkg else pd.DataFrame()
+    if pkg and not df.empty:
 
+        st.divider()
 
-render_queue_panel()
+        # Current-app strip: immediate feedback on which dataset is active
+        app_name = dict(pkg_entries).get(pkg, pkg) if pkg_entries else pkg
+        last_crawl = str(df["crawled_at"].max())[:10] if "crawled_at" in df.columns else ""
+        st.subheader(app_name)
+        st.caption(f"`{pkg}` · {len(df):,} reviews · last crawl {last_crawl}")
 
-# --- Results ---
-pkg = st.session_state.get("current_package_id", "")
-df: pd.DataFrame = get_reviews(pkg, DB_PATH) if pkg else pd.DataFrame()
-if pkg and not df.empty:
+        detail_view = st.radio("Explore", ["Reviews", "Analytics"], horizontal=True, key="detail_view", label_visibility="collapsed")
 
-    st.divider()
+        if detail_view == "Reviews":
+            # Header row: title left, export buttons right
+            hcol_title, hcol_csv, hcol_json = st.columns([6, 1, 1])
+            with hcol_title:
+                st.subheader(f"Reviews — {len(df):,} total")
 
-    # Current-app strip: immediate feedback on which dataset is active
-    app_name = dict(pkg_entries).get(pkg, pkg) if pkg_entries else pkg
-    last_crawl = str(df["crawled_at"].max())[:10] if "crawled_at" in df.columns else ""
-    st.markdown(f"### {app_name}")
-    st.caption(f"`{pkg}` · {len(df):,} reviews · last crawl {last_crawl}")
+            # Rating filter — 5 checkboxes always visible with counts per rating
+            rating_counts = df["score"].value_counts()
+            st.markdown("<p style='font-size:0.875rem;font-weight:500;color:#374151;margin-bottom:0.25rem'>Show ratings</p>", unsafe_allow_html=True)
+            rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+            selected_stars = []
+            filter_preferences = st.session_state.get("review_filters", {})
+            for col, star in zip([rc1, rc2, rc3, rc4, rc5], [5, 4, 3, 2, 1]):
+                cnt = int(rating_counts.get(star, 0))
+                with col:
+                    if st.checkbox(f"{star} stars · {cnt:,}",
+                                   value=filter_preferences.get(f"star_filter_{star}", True),
+                                   key=f"star_filter_{star}", on_change=remember_review_filters):
+                        selected_stars.append(star)
+            filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
 
-    tab_reviews, tab_analysis = st.tabs(["Reviews", "Analysis"])
+            # Keyword mining without a CSV round-trip ("ads", "crash", "quảng cáo"...)
+            search_q = st.text_input(
+                "Search in reviews",
+                placeholder="e.g. quảng cáo, crash, ads — plain text, not regex",
+                key="review_search",
+                value=filter_preferences.get("review_search", ""),
+                on_change=remember_review_filters,
+            ).strip()
+            if search_q:
+                filtered = filtered[
+                    filtered["content"].str.contains(search_q, case=False, na=False, regex=False)
+                ]
 
-    with tab_reviews:
-        # Header row: title left, export buttons right
-        hcol_title, hcol_csv, hcol_json = st.columns([6, 1, 1])
-        with hcol_title:
-            st.subheader(f"Reviews — {len(df):,} total")
+            # Export buttons — top-right, always visible before table.
+            # Cached so every checkbox click doesn't re-serialize the whole dataset;
+            # keyed on filter + row count + latest crawl time, _df itself is not hashed.
+            @st.cache_data(max_entries=8)
+            def build_exports(pkg_key, stars_key, row_count, latest_crawl, _df):
+                return _df.to_csv(index=False), _df.to_json(orient="records", force_ascii=False, indent=2)
 
-        # Rating filter — 5 checkboxes always visible with counts per rating
-        rating_counts = df["score"].value_counts()
-        st.markdown("<p style='font-size:0.875rem;font-weight:500;color:#374151;margin-bottom:0.25rem'>Show ratings</p>", unsafe_allow_html=True)
-        rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-        selected_stars = []
-        for col, star in zip([rc1, rc2, rc3, rc4, rc5], [5, 4, 3, 2, 1]):
-            cnt = int(rating_counts.get(star, 0))
-            with col:
-                if st.checkbox(f"{'⭐' * star}  {cnt:,}", value=True, key=f"star_filter_{star}"):
-                    selected_stars.append(star)
-        filtered = df[df["score"].isin(selected_stars)] if selected_stars else df
-
-        # Keyword mining without a CSV round-trip ("ads", "crash", "quảng cáo"...)
-        search_q = st.text_input(
-            "Search in reviews",
-            placeholder="e.g. quảng cáo, crash, ads — plain text, not regex",
-            key="review_search",
-        ).strip()
-        if search_q:
-            filtered = filtered[
-                filtered["content"].str.contains(search_q, case=False, na=False, regex=False)
-            ]
-
-        # Export buttons — top-right, always visible before table.
-        # Cached so every checkbox click doesn't re-serialize the whole dataset;
-        # keyed on filter + row count + latest crawl time, _df itself is not hashed.
-        @st.cache_data(max_entries=8)
-        def build_exports(pkg_key, stars_key, row_count, latest_crawl, _df):
-            return _df.to_csv(index=False), _df.to_json(orient="records", force_ascii=False, indent=2)
-
-        latest_crawl = str(filtered["crawled_at"].max()) if not filtered.empty else ""
-        csv, json_str = build_exports(
-            pkg, (tuple(sorted(selected_stars)), search_q), len(filtered), latest_crawl, filtered
-        )
-        with hcol_csv:
-            st.download_button(
-                "Download CSV",
-                data=csv,
-                file_name=f"{pkg}-reviews.csv",
-                mime="text/csv",
+            latest_crawl = str(filtered["crawled_at"].max()) if not filtered.empty else ""
+            csv, json_str = build_exports(
+                pkg, (tuple(sorted(selected_stars)), search_q), len(filtered), latest_crawl, filtered
             )
-        with hcol_json:
-            st.download_button(
-                "Download JSON",
-                data=json_str,
-                file_name=f"{pkg}-reviews.json",
-                mime="application/json",
+            with hcol_csv:
+                st.download_button(
+                    "Download CSV",
+                    data=csv,
+                    file_name=f"{pkg}-reviews.csv",
+                    mime="text/csv",
+                )
+            with hcol_json:
+                st.download_button(
+                    "Download JSON",
+                    data=json_str,
+                    file_name=f"{pkg}-reviews.json",
+                    mime="application/json",
+                )
+
+            # Display table — dates trimmed to day precision (timestamps eat width)
+            display_cols = ["username", "score", "content", "thumbs_up", "review_created_at", "reply_content"]
+            display_df = filtered[display_cols].copy()
+            display_df["review_created_at"] = display_df["review_created_at"].str.slice(0, 10)
+            st.dataframe(
+                display_df.rename(columns={
+                    "username": "User",
+                    "score": "Rating",
+                    "content": "Review",
+                    "thumbs_up": "Helpful",
+                    "review_created_at": "Date",
+                    "reply_content": "Dev Reply",
+                }),
+                column_config={
+                    "Rating": st.column_config.NumberColumn(format="%d / 5", width="small"),
+                    "Review": st.column_config.TextColumn(width="large"),
+                    "Date": st.column_config.TextColumn(width="small"),
+                },
+                use_container_width=True,
+                height=500,
             )
+            st.caption(f"Showing {len(filtered):,} of {len(df):,} reviews")
 
-        # Display table — dates trimmed to day precision (timestamps eat width)
-        display_cols = ["username", "score", "content", "thumbs_up", "review_created_at", "reply_content"]
-        display_df = filtered[display_cols].copy()
-        display_df["review_created_at"] = display_df["review_created_at"].str.slice(0, 10)
-        st.dataframe(
-            display_df.rename(columns={
-                "username": "User",
-                "score": "Rating",
-                "content": "Review",
-                "thumbs_up": "👍",
-                "review_created_at": "Date",
-                "reply_content": "Dev Reply",
-            }),
-            column_config={
-                "Rating": st.column_config.NumberColumn(format="%d ⭐", width="small"),
-                "Review": st.column_config.TextColumn(width="large"),
-                "Date": st.column_config.TextColumn(width="small"),
-            },
-            use_container_width=True,
-            height=500,
-        )
-        st.caption(f"Showing {len(filtered):,} of {len(df):,} reviews")
+        else:
+            render_analysis_tab(df, pkg)
 
-    with tab_analysis:
-        render_analysis_tab(df, pkg)
+    else:
+        st.info("No saved reviews for this app yet. Follow its progress in Crawl and refresh results after the first page is saved." if pkg else "Choose a crawled app from the sidebar, or add your first app in Crawl.")
 
 # --- Footer (always visible) ---
 st.markdown(FOOTER_HTML, unsafe_allow_html=True)

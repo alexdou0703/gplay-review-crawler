@@ -177,10 +177,14 @@ def spike_details(
     for _, row in spikes[spikes["is_spike"]].iterrows():
         start = row["period"] - offset
         end = row["period"]
-        window_df = df[(df["dt"] > start) & (df["dt"] <= end)]
+        # Period labels fall at midnight; include the entire final calendar
+        # day, matching the daily/weekly/monthly review-count buckets.
+        review_days = df["dt"].dt.normalize()
+        window_df = df[(review_days > start.normalize()) & (review_days <= end.normalize())]
         lang_counts = window_df["lang"].value_counts()
         new_versions = versions[
-            (versions["first_seen"] > start) & (versions["first_seen"] <= end)
+            (versions["first_seen"].dt.normalize() > start.normalize())
+            & (versions["first_seen"].dt.normalize() <= end.normalize())
         ]["app_version"].tolist()
         details.append({
             "period": end,

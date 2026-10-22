@@ -383,6 +383,28 @@ def count_reviews(package_id: str, db_path: str) -> int:
         return conn.execute(sql, (package_id,)).fetchone()[0]
 
 
+def app_library_summary(db_path: str) -> pd.DataFrame:
+    """One aggregate query for the app table, including apps awaiting reviews."""
+    sql = """
+        WITH packages AS (
+            SELECT package_id FROM apps UNION SELECT package_id FROM reviews
+        ), totals AS (
+            SELECT package_id, COUNT(*) AS reviews, AVG(score) AS average_rating,
+                   COUNT(DISTINCT NULLIF(TRIM(lang), '')) AS languages,
+                   MAX(crawled_at) AS last_saved
+            FROM reviews GROUP BY package_id
+        )
+        SELECT p.package_id, COALESCE(a.app_name, p.package_id) AS app_name,
+               COALESCE(t.reviews, 0) AS reviews, t.average_rating,
+               COALESCE(t.languages, 0) AS languages, t.last_saved
+        FROM packages p LEFT JOIN apps a USING(package_id)
+        LEFT JOIN totals t USING(package_id)
+        ORDER BY app_name COLLATE NOCASE, p.package_id
+    """
+    with sqlite3.connect(db_path) as conn:
+        return pd.read_sql_query(sql, conn)
+
+
 # --- Durable crawl queue ---------------------------------------------------
 
 def _now() -> str:
@@ -454,6 +476,50 @@ def list_jobs(db_path: str, *, limit: int = 100) -> list[dict]:
             "SELECT * FROM crawl_jobs ORDER BY updated_at DESC LIMIT ?", (limit,)
         ).fetchall()
     return [_job_from_row(row) for row in rows]
+
+
+def queue_snapshot(db_path: str, *, history_limit: int = 20) -> dict:
+    """Read all active jobs and bounded history from the same SQLite snapshot."""
+    active_statuses = "('queued','running','retrying','waiting')"
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN")
+        active = conn.execute(
+            f"SELECT * FROM crawl_jobs WHERE status IN {active_statuses} ORDER BY created_at, job_id"
+        ).fetchall()
+        history = conn.execute(
+            f"""SELECT * FROM crawl_jobs WHERE status NOT IN {active_statuses}
+                ORDER BY COALESCE(finished_at, updated_at) DESC, job_id LIMIT ?""",
+            (max(0, history_limit),),
+        ).fetchall()
+        history_count = conn.execute(
+            f"SELECT COUNT(*) FROM crawl_jobs WHERE status NOT IN {active_statuses}"
+        ).fetchone()[0]
+        review_counts = dict(conn.execute(
+            f"""SELECT package_id, COUNT(*) FROM reviews WHERE package_id IN (
+                SELECT package_id FROM crawl_jobs WHERE status IN {active_statuses}
+                UNION SELECT package_id FROM (
+                    SELECT package_id FROM crawl_jobs WHERE status NOT IN {active_statuses}
+                    ORDER BY COALESCE(finished_at, updated_at) DESC, job_id LIMIT ?
+                )
+            ) GROUP BY package_id""", (max(0, history_limit),),
+        ).fetchall())
+    return {"active": [_job_from_row(row) for row in active],
+            "history": [_job_from_row(row) for row in history], "history_count": history_count,
+            "review_counts": review_counts}
+
+
+def latest_package_job(package_id: str, db_path: str) -> dict | None:
+    """Prefer current work, including retries of an older attempt, for Insights."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """SELECT * FROM crawl_jobs WHERE package_id=?
+               ORDER BY CASE WHEN status IN ('queued','running','retrying','waiting') THEN 0 ELSE 1 END,
+                        COALESCE(finished_at, updated_at) DESC, created_at DESC, job_id DESC LIMIT 1""",
+            (package_id,),
+        ).fetchone()
+    return _job_from_row(row) if row else None
 
 
 def claim_job(db_path: str, worker_id: str, lease_seconds: int = 90) -> dict | None:

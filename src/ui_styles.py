@@ -1,428 +1,151 @@
-"""Mericrawler brand styles and HTML components for the Streamlit app."""
+"""Shared styles for Mericrawler's light, table-first workspace."""
 
-# ── Mericrawler brand CSS ────────────────────────────────────────────────────
 MERICRAWLER_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-/* Base typography */
-html, body, [class*="css"] {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap');
+:root {
+    --mc-canvas: #F7F8FA; --mc-surface: #FFFFFF; --mc-ink: #172033;
+    --mc-muted: #596579; --mc-line: #E3E7EE; --mc-blue: #2563EB;
 }
-
-/* App background */
-.stApp {
-    background: #F5F3FF;
-}
-
-/* Hide Streamlit chrome — toolbar, menu, decoration — but keep the header
-   itself: it hosts the sidebar expand control, without which a collapsed
-   sidebar (mobile/split-screen auto-collapse) can never be reopened. */
+html, body, [data-testid="stApp"] { font-family: 'Be Vietnam Pro', sans-serif; color: var(--mc-ink); }
+input, button, textarea, select, p, h1, h2, h3, [data-testid="stMetricValue"] { font-family: 'Be Vietnam Pro', sans-serif !important; }
+.stApp { background: var(--mc-canvas); }
 #MainMenu, footer { visibility: hidden; }
-[data-testid="stToolbar"] { display: none !important; }
-[data-testid="stDecoration"] { display: none !important; }
-[data-testid="stHeader"] {
-    background: transparent !important;
-    height: 2.5rem !important;
-    /* fixed header must not swallow clicks on content underneath */
-    pointer-events: none !important;
+/* The sidebar expander lives inside stToolbar in newer Streamlit. */
+[data-testid="stToolbar"] { visibility: hidden; pointer-events: none !important; }
+[data-testid="stDecoration"] { display: none; }
+[data-testid="stHeader"] { background: transparent; pointer-events: none; }
+[data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"] {
+    display: flex !important; visibility: visible !important; pointer-events: auto !important; color: var(--mc-ink);
 }
-[data-testid="stSidebarCollapsedControl"],
-[data-testid="stExpandSidebarButton"] {
-    display: flex !important;
-    color: #1E1B4B !important;
-    pointer-events: auto !important;
+.block-container { max-width: 1480px; padding: 2.5rem 2rem 3rem; }
+h1 { font-size: 1.7rem !important; letter-spacing: -.035em; font-weight: 600 !important; }
+h2 { font-size: 1.3rem !important; font-weight: 600 !important; }
+h3 { font-size: 1.08rem !important; font-weight: 600 !important; }
+[data-testid="stCaptionContainer"] { opacity: 1 !important; }
+[data-testid="stCaptionContainer"] p { color: var(--mc-muted); font-size: .9rem; line-height: 1.6; }
+[data-testid="stSidebar"] { background: #FFF; border-right: 1px solid var(--mc-line); }
+[data-testid="stSidebar"] h1 { font-size: 1rem !important; }
+[data-testid="stSidebar"] button { text-align: left; }
+button, [data-testid="stDownloadButton"] button {
+    min-height: 44px; border-radius: 6px !important;
+    transition: background-color 150ms, border-color 150ms;
 }
-
-/* Content container — remove top gap left by hidden header */
-.block-container {
-    padding-top: 1.5rem !important;
-    padding-bottom: 4rem !important;
-    max-width: 1200px !important;
+button[kind="primary"], button[kind="primaryFormSubmit"] { background: var(--mc-blue); color: white; border-color: var(--mc-blue); }
+button[kind="secondary"] { background: white; border-color: var(--mc-line); color: var(--mc-ink); }
+button[kind="secondary"]:hover { background: #EFF6FF; border-color: #93B4EE; color: #1D4ED8; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, [role="button"]:focus-visible, [role="radio"]:focus-visible {
+    outline: 3px solid #2563EB !important; outline-offset: 3px !important;
 }
-
-/* ── Sidebar ────────────────────────────────────────────────────────────────── */
-[data-testid="stSidebar"] {
-    background: #1E1B4B !important;
-    border-right: none !important;
+[data-testid="stMain"] input, [data-testid="stMain"] textarea { font-size: 19px !important; }
+[data-baseweb="select"] > div, [data-baseweb="input"], [data-baseweb="textarea"] { background: #FFF; border-radius: 6px; }
+[data-testid="stForm"] { background: #FFF; border-color: var(--mc-line); border-radius: 8px; }
+[data-testid="stVerticalBlockBorderWrapper"] > div { border-color: var(--mc-line); }
+[data-testid="stVerticalBlock"]:has(> [data-testid="stLayoutWrapper"] > .stAltairChart) { min-width: 0; }
+[data-testid="stMetric"] { min-height: 124px; padding: 1rem 1.1rem; background: #FFF; border: 1px solid var(--mc-line); border-radius: 6px; }
+[data-testid="stMetricLabel"] { color: var(--mc-muted); }
+[data-testid="stMetricValue"] { font-size: 1.8rem; font-variant-numeric: tabular-nums; }
+[data-testid="stDataFrame"] { border: 1px solid var(--mc-line); border-radius: 6px; background: white; }
+[data-testid="stRadio"] [role="radiogroup"] { gap: .5rem 1.2rem; flex-wrap: wrap; }
+[data-testid="stRadio"] label { min-height: 44px; align-items: center; }
+/* Keep native radio semantics and arrow-key navigation, with a tab-like surface. */
+[role="radiogroup"][aria-label="Workspace"], [role="radiogroup"][aria-label="Explore"] {
+    border-bottom: 1px solid var(--mc-line); gap: .25rem;
 }
-[data-testid="stSidebar"] * { color: #E0E7FF !important; }
-
-[data-testid="stSidebar"] h1 {
-    color: #C4B5FD !important;
-    font-size: 0.75rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.1em !important;
-    text-transform: uppercase !important;
-    margin-bottom: 0.75rem !important;
+[role="radiogroup"][aria-label="Workspace"] label,
+[role="radiogroup"][aria-label="Explore"] label { padding: .35rem 1rem; border-bottom: 2px solid transparent; }
+[role="radiogroup"][aria-label="Workspace"] label:has(input:checked),
+[role="radiogroup"][aria-label="Explore"] label:has(input:checked) { color: #1D4ED8; border-bottom-color: var(--mc-blue); background: #EFF6FF; }
+[role="radiogroup"][aria-label="Workspace"] label > div > div:first-child:not([data-testid]),
+[role="radiogroup"][aria-label="Explore"] label > div > div:first-child:not([data-testid]) { display: none; }
+[data-testid="stRadio"] label:has(input:focus-visible) { outline: 3px solid #2563EB; outline-offset: 2px; }
+[data-testid="stCheckbox"] label { white-space: nowrap; }
+hr { border-color: var(--mc-line); margin: 1rem 0; }
+.mericrawler-header { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; justify-content:space-between; padding:0 0 1.1rem; margin-bottom:.8rem; border-bottom:1px solid var(--mc-line); }
+.mericrawler-brand { font-size:1.5rem; font-weight:600; letter-spacing:-.045em; color:var(--mc-blue); }
+.mericrawler-brand span { font-weight:400; }
+.mericrawler-header-note { font-size:.8rem; color:var(--mc-muted); }
+.mericrawler-footer { margin-top:2.5rem; padding-top:1rem; border-top:1px solid var(--mc-line); color:var(--mc-muted); font-size:.78rem; display:flex; flex-wrap:wrap; gap:.5rem 2rem; justify-content:space-between; }
+.queue-status { padding:.4rem .75rem; border-radius:5px; font-size:.95rem; font-weight:600; }
+.queue-status-info { background:#EAF2FF; color:#1D4ED8; }
+.queue-status-neutral { background:#F1F5F9; color:#475569; }
+.queue-status-warning { background:#FFF4DB; color:#854D0E; }
+.queue-status-success { background:#DCFCE7; color:#166534; }
+.queue-status-error { background:#FEE2E2; color:#991B1B; }
+.queue-notice, .mericrawler-info, .mericrawler-success, .mericrawler-warning, .mericrawler-error { padding:.7rem .9rem; margin:.6rem 0 .3rem; border-left:3px solid #2563EB; background:#EFF6FF; color:#1E40AF; line-height:1.6; font-size:.9rem; overflow-wrap:anywhere; }
+.queue-notice-warning, .mericrawler-warning { background:#FFFBEB; color:#854D0E; border-color:#D97706; }
+.queue-notice-success, .mericrawler-success { background:#F0FDF4; color:#166534; border-color:#16A34A; }
+.queue-notice-error, .mericrawler-error { background:#FEF2F2; color:#991B1B; border-color:#DC2626; }
+/* Crawl: distinct input and monitoring surfaces; only the submit action is filled. */
+[data-testid="stForm"]:has(.crawl-form-heading) {
+    padding:1.5rem; border:1px solid #BDCCE2; border-top:4px solid var(--mc-blue); border-radius:10px;
+    margin-bottom:1rem;
 }
-
-/* All states pinned: the light base theme paints focused/active buttons with
-   its white secondary background, which turns the pale icon invisible on the
-   dark sidebar. */
-/* Descendant (not child) selector: buttons with help tooltips are wrapped in
-   an extra container, which a `>` selector misses — that left the sync icon
-   white-on-white. */
-[data-testid="stSidebar"] .stButton button,
-[data-testid="stSidebar"] .stButton button:focus,
-[data-testid="stSidebar"] .stButton button:focus:not(:active),
-[data-testid="stSidebar"] .stButton button:active {
-    background: rgba(139, 92, 246, 0.25) !important;
-    border: 1px solid rgba(139, 92, 246, 0.45) !important;
-    color: #EDE9FE !important;
-    border-radius: 8px !important;
-    padding: 0.5rem 0.875rem !important;
-    font-size: 0.825rem !important;
-    font-weight: 400 !important;
-    transition: all 0.2s !important;
-    width: 100% !important;
-    text-align: left !important;
-    cursor: pointer !important;
+.crawl-section-heading { display:flex; align-items:flex-start; gap:1rem; padding-bottom:1rem; border-bottom:1px solid #D6DEE9; margin-bottom:.25rem; }
+.crawl-section-heading h2 { font-size:1.5rem !important; line-height:1.3; padding:0 !important; margin:0 0 .45rem !important; }
+.crawl-section-heading p { font-size:1rem; line-height:1.6; color:var(--mc-muted); margin:0; max-width:65ch; }
+.crawl-step { display:grid; place-items:center; flex:0 0 36px; height:36px; border-radius:6px; background:#DBEAFE; color:#1D4ED8; font-size:1.15rem; font-weight:600; }
+.queue-panel-heading .crawl-step { background:#E8EDF4; color:#334155; }
+[data-testid="stForm"]:has(.crawl-form-heading) [data-testid="stWidgetLabel"] p { font-size:1.05rem; font-weight:600; }
+[data-testid="stForm"]:has(.crawl-form-heading) [data-baseweb="textarea"],
+[data-testid="stForm"]:has(.crawl-form-heading) [data-baseweb="select"] > div,
+[data-testid="stForm"]:has(.crawl-form-heading) [data-baseweb="input"],
+[data-testid="stForm"]:has(.crawl-form-heading) [data-testid="stTextAreaRootElement"],
+[data-testid="stForm"]:has(.crawl-form-heading) [data-testid="stSelectbox"] [role="group"] { border:1px solid #8998AE; border-radius:6px; background:#FCFDFF; }
+[data-testid="stForm"]:has(.crawl-form-heading) [data-baseweb="select"] { font-size:19px; }
+[data-testid="stForm"]:has(.crawl-form-heading) [data-testid="stFormSubmitButton"] button { min-height:52px; }
+[data-testid="stForm"]:has(.crawl-form-heading) [data-testid="stFormSubmitButton"] p { font-size:1.1rem; font-weight:600; }
+[data-testid="stForm"]:has(.crawl-form-heading) [data-testid="stCaptionContainer"] p { font-size:1rem; }
+.queue-notice { font-size:1rem; padding:1rem; border-left-width:4px; }
+.queue-guidance { padding:1.1rem 1.25rem; background:#EFF6FF; border:1px solid #BFDBFE; border-left:4px solid #2563EB; border-radius:6px; margin:.25rem 0 .75rem; }
+.queue-guidance > strong { display:block; color:#1E40AF; font-size:1.15rem; margin-bottom:.35rem; }
+.queue-guidance > p { color:#334155; font-size:1rem; line-height:1.6; max-width:85ch; margin:0; }
+.queue-guidance-warning { background:#FFFBEB; border-color:#F3D79A; border-left-color:#D97706; }
+.queue-guidance-warning > strong { color:#854D0E; }
+/* The fragment adds one inner block. Support both Streamlit container layouts. */
+:is([data-testid="stVerticalBlockBorderWrapper"]:has(.queue-panel-heading),
+    [data-testid="stVerticalBlock"]:has(> [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] .queue-panel-heading)) {
+    background:#FFF; border:1px solid #BDCCE2; border-top:4px solid #64748B; border-radius:10px; padding:1.5rem;
 }
-[data-testid="stSidebar"] .stButton button:hover {
-    background: rgba(139, 92, 246, 0.45) !important;
-    border-color: #7C3AED !important;
-    color: #FFFFFF !important;
-}
-
-/* ── Headings ───────────────────────────────────────────────────────────────── */
-h1 {
-    font-size: 1.625rem !important;
-    font-weight: 700 !important;
-    color: #1E1B4B !important;
-    letter-spacing: -0.02em !important;
-    margin-bottom: 0.25rem !important;
-}
-h2, h3 {
-    color: #1E1B4B !important;
-    font-weight: 600 !important;
-    letter-spacing: -0.01em !important;
-}
-[data-testid="stCaptionContainer"] p {
-    color: #6B7280 !important;
-    font-size: 0.9rem !important;
-}
-
-/* ── Form labels ────────────────────────────────────────────────────────────── */
-.stTextInput label,
-.stSelectbox label,
-.stMultiSelect label {
-    color: #374151 !important;
-    font-weight: 500 !important;
-    font-size: 0.875rem !important;
-}
-
-/* ── Text input ─────────────────────────────────────────────────────────────── */
-.stTextInput > div > div > input {
-    border: 1.5px solid #DDD6FE !important;
-    border-radius: 10px !important;
-    background: #FFFFFF !important;
-    color: #1E1B4B !important;
-    font-size: 0.925rem !important;
-    transition: border-color 0.2s, box-shadow 0.2s !important;
-}
-.stTextInput > div > div > input:focus {
-    border-color: #7C3AED !important;
-    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12) !important;
-}
-
-/* ── Selectbox ──────────────────────────────────────────────────────────────── */
-.stSelectbox > div > div {
-    border: 1.5px solid #DDD6FE !important;
-    border-radius: 10px !important;
-    background: #FFFFFF !important;
-}
-/* Selected value text — force dark on white background */
-.stSelectbox [data-baseweb="select"] *,
-.stSelectbox [data-baseweb="select"] span,
-.stSelectbox [data-baseweb="select"] div,
-.stSelectbox [data-baseweb="select"] input,
-[data-testid="stSelectbox"] * {
-    color: #1E1B4B !important;
-}
-/* Dropdown popup — light theme */
-[data-baseweb="popover"] [data-baseweb="menu"] {
-    background: #FFFFFF !important;
-    border: 1px solid #DDD6FE !important;
-    border-radius: 10px !important;
-    box-shadow: 0 8px 24px rgba(109,40,217,0.12) !important;
-}
-[data-baseweb="popover"] li {
-    color: #1E1B4B !important;
-    background: #FFFFFF !important;
-}
-[data-baseweb="popover"] li:hover,
-[data-baseweb="popover"] li[aria-selected="true"] {
-    background: #F5F3FF !important;
-    color: #6D28D9 !important;
-}
-
-/* ── Primary button ─────────────────────────────────────────────────────────── */
-.stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #7C3AED, #5B21B6) !important;
-    color: #FFFFFF !important;
-    border: none !important;
-    border-radius: 10px !important;
-    padding: 0.625rem 1.5rem !important;
-    font-weight: 600 !important;
-    font-size: 0.925rem !important;
-    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3) !important;
-    transition: all 0.2s !important;
-    cursor: pointer !important;
-}
-.stButton > button[kind="primary"]:hover {
-    box-shadow: 0 4px 18px rgba(124, 58, 237, 0.45) !important;
-    transform: translateY(-1px) !important;
-}
-
-/* Keyboard focus and reduced-motion support for the queue workflow. */
-button:focus-visible, input:focus-visible, textarea:focus-visible,
-[role="button"]:focus-visible {
-    outline: 3px solid #F59E0B !important;
-    outline-offset: 2px !important;
+@media (max-width: 768px) {
+    .block-container { padding:3.5rem 1rem 2rem; }
+    .mericrawler-header-note { width:100%; }
+    [data-testid="stMain"] [data-testid="stHorizontalBlock"] { flex-wrap:wrap !important; gap:.75rem; }
+    [data-testid="stMain"] [data-testid="stColumn"] { min-width:min(100%, 280px) !important; flex:1 1 280px !important; }
+    [data-testid="stForm"]:has(.crawl-form-heading) { padding:1rem; }
+    .crawl-section-heading { gap:.65rem; }
+    .crawl-section-heading h2 { font-size:1.3rem !important; }
+    .queue-notice { font-size:1rem; }
 }
 @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
-        scroll-behavior: auto !important;
-    }
-}
-
-/* ── Download buttons ───────────────────────────────────────────────────────── */
-.stDownloadButton > button {
-    background: #FFFFFF !important;
-    border: 1.5px solid #DDD6FE !important;
-    color: #4C1D95 !important;
-    border-radius: 10px !important;
-    font-weight: 500 !important;
-    font-size: 0.9rem !important;
-    transition: all 0.2s !important;
-    cursor: pointer !important;
-}
-.stDownloadButton > button:hover {
-    border-color: #7C3AED !important;
-    background: #F5F3FF !important;
-    color: #6D28D9 !important;
-}
-
-/* ── DataTable ──────────────────────────────────────────────────────────────── */
-.stDataFrame {
-    border-radius: 12px !important;
-    overflow: hidden !important;
-    border: 1px solid #EDE9FE !important;
-    background: #FFFFFF !important;
-}
-
-/* ── Rating filter checkboxes as pill cards ─────────────────────────────────── */
-.block-container [data-testid="stCheckbox"] {
-    background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%) !important;
-    border: 1.5px solid #C4B5FD !important;
-    border-radius: 10px !important;
-    padding: 0.4rem 0.75rem !important;
-    transition: border-color 0.2s, background 0.2s, box-shadow 0.2s !important;
-}
-.block-container [data-testid="stCheckbox"]:has(input:checked) {
-    background: linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%) !important;
-    border-color: #5B21B6 !important;
-    box-shadow: 0 2px 8px rgba(124,58,237,0.3) !important;
-}
-.block-container [data-testid="stCheckbox"]:has(input:checked) label {
-    color: #FFFFFF !important;
-}
-.block-container [data-testid="stCheckbox"]:hover {
-    border-color: #7C3AED !important;
-    box-shadow: 0 2px 8px rgba(124,58,237,0.2) !important;
-    cursor: pointer !important;
-}
-.block-container [data-testid="stCheckbox"] label {
-    color: #4C1D95 !important;
-    font-weight: 500 !important;
-    font-size: 0.875rem !important;
-    cursor: pointer !important;
-    white-space: nowrap !important;  /* keep count on the same line as the stars */
-}
-
-/* ── Custom brand alert boxes ───────────────────────────────────────────────── */
-.mericrawler-info {
-    background: #EDE9FE;
-    border-left: 4px solid #7C3AED;
-    border-radius: 10px;
-    padding: 0.75rem 1rem;
-    color: #1E1B4B;
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-}
-.mericrawler-success {
-    background: #ECFDF5;
-    border-left: 4px solid #10B981;
-    border-radius: 10px;
-    padding: 0.75rem 1rem;
-    color: #065F46;
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-}
-.mericrawler-warning {
-    background: #FFFBEB;
-    border-left: 4px solid #F59E0B;
-    border-radius: 10px;
-    padding: 0.75rem 1rem;
-    color: #78350F;
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-}
-.mericrawler-error {
-    background: #FEF2F2;
-    border-left: 4px solid #EF4444;
-    border-radius: 10px;
-    padding: 0.75rem 1rem;
-    color: #7F1D1D;
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-}
-
-/* ── Divider ────────────────────────────────────────────────────────────────── */
-hr { border-color: #DDD6FE !important; margin: 1.5rem 0 !important; }
-
-/* ── Progress bar ───────────────────────────────────────────────────────────── */
-.stProgress > div > div > div {
-    background: linear-gradient(90deg, #7C3AED, #8B5CF6) !important;
-    border-radius: 4px !important;
-}
-/* Progress text label — catch all possible Streamlit DOM structures */
-.stProgress p,
-.stProgress span,
-.stProgress label,
-.stProgress div > p,
-[data-testid="stProgressBar"] p,
-[data-testid="stProgressBar"] span,
-[data-testid="stProgressBar"] label,
-[data-testid="stProgressBar"] div > p,
-[data-testid="stProgressBarMessage"],
-[data-testid="stProgressBarMessage"] * {
-    color: #4C1D95 !important;
-    font-size: 0.82rem !important;
-    font-weight: 600 !important;
-}
-
-</style>
-"""
-
-# ── Footer CSS (appended to main CSS block via app.py) ───────────────────────
-FOOTER_CSS_EXTRA = """
-<style>
-.mericrawler-footer {
-    margin-top: 3rem;
-    padding: 1.5rem 0 1rem;
-    border-top: 1px solid #DDD6FE;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-}
-.mericrawler-footer-brand {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: #1E1B4B;
-    letter-spacing: -0.01em;
-}
-.mericrawler-footer-brand span { color: #7C3AED; }
-.mericrawler-footer-links {
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-    flex-wrap: wrap;
-}
-.mericrawler-footer-links a {
-    font-size: 0.825rem;
-    color: #6B7280;
-    text-decoration: none;
-    transition: color 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-.mericrawler-footer-links a:hover { color: #7C3AED; }
-.mericrawler-footer-copy {
-    font-size: 0.775rem;
-    color: #9CA3AF;
-    width: 100%;
-    margin-top: 0.25rem;
+    *, *::before, *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
 }
 </style>
 """
-
-# ── Brand header HTML ─────────────────────────────────────────────────────────
+FOOTER_CSS_EXTRA = ""
 BRAND_HEADER_HTML = """
-<div style="display:flex; align-items:center; justify-content:space-between;
-            margin-bottom:1.75rem; padding-bottom:1.25rem; border-bottom:1px solid #EDE9FE;">
-    <div style="display:flex; align-items:center; gap:14px;">
-        <div style="width:44px; height:44px;
-                    background:linear-gradient(135deg,#7C3AED,#5B21B6);
-                    border-radius:12px; display:flex; align-items:center;
-                    justify-content:center; flex-shrink:0;
-                    box-shadow:0 4px 12px rgba(124,58,237,0.3);">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-                 stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-            </svg>
-        </div>
-        <div>
-            <div style="font-size:1.25rem; font-weight:700; color:#1E1B4B;
-                        letter-spacing:-0.02em; line-height:1.2;">
-                Meri<span style="color:#7C3AED;">crawler</span>
-            </div>
-            <div style="font-size:0.78rem; color:#6B7280; margin-top:2px;">
-                Google Play Review Intelligence
-            </div>
-        </div>
-    </div>
-    <a href="https://mericrawler.local" target="_blank"
-       style="font-size:0.8rem; color:#7C3AED; text-decoration:none; font-weight:500;
-              border:1px solid #DDD6FE; padding:0.35rem 0.875rem; border-radius:8px;
-              background:#FFFFFF; transition:all 0.2s;">
-        Mericrawler
-    </a>
+<div class="mericrawler-header">
+    <div class="mericrawler-brand">meri<span>crawler</span></div>
+    <div class="mericrawler-header-note">Google Play · Review intelligence</div>
 </div>
 """
-
 FOOTER_HTML = """
-<div class="mericrawler-footer">
-    <div class="mericrawler-footer-brand">Meri<span>crawler</span></div>
-    <div class="mericrawler-footer-links">
-        <a href="mailto:dylannn08200@gmail.com">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect width="20" height="16" x="2" y="4" rx="2"/>
-                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
-            </svg>
-            dylannn08200@gmail.com
-        </a>
-        <a href="https://mericrawler.local" target="_blank">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-            </svg>
-            Mericrawler
-        </a>
-    </div>
-    <div class="mericrawler-footer-copy">© 2026 Mericrawler. Local-first review intelligence.</div>
-</div>
+<div class="mericrawler-footer"><span>Mericrawler · Review intelligence</span>
+<span>Your saved reviews, in one workspace.</span></div>
 """
 
 
-# ── Alert box helpers ─────────────────────────────────────────────────────────
 def info_box(msg: str) -> str:
     return f'<div class="mericrawler-info">{msg}</div>'
+
 
 def success_box(msg: str) -> str:
     return f'<div class="mericrawler-success">{msg}</div>'
 
+
 def warning_box(msg: str) -> str:
     return f'<div class="mericrawler-warning">{msg}</div>'
+
 
 def error_box(msg: str) -> str:
     return f'<div class="mericrawler-error">{msg}</div>'
