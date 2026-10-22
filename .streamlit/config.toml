@@ -6,7 +6,8 @@ runOnSave = true
 # radios, metrics, dataframes and chart canvases illegible.
 [theme]
 base = "light"
-primaryColor = "#7C3AED"
-backgroundColor = "#F5F3FF"
+baseFontSize = 20
+primaryColor = "#2563EB"
+backgroundColor = "#F7F8FA"
 secondaryBackgroundColor = "#FFFFFF"
-textColor = "#1E1B4B"
+textColor = "#172033"
