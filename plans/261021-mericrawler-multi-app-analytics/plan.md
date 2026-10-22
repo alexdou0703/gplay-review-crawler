@@ -11,7 +11,7 @@ source: user-feedback
 
 Turn the current synchronous Streamlit crawler into a resilient local crawling workspace: one browser session can queue and monitor many apps, crawling continues outside the Streamlit rerun, rate-limit behavior is measurable and controlled, analytics is validated against the stored dataset, and the product is branded as **Mericrawler**.
 
-## Current diagnosis
+## Original diagnosis (2026-10-21, before implementation)
 
 - `src/app.py:160` runs the complete crawl inside the Streamlit script run. A click blocks that browser session until all requested pages/languages finish.
 - `src/crawler/gplay_crawler.py:296` crawls the 22-language sweep sequentially. This is conservative for Google but makes one app especially slow.
@@ -30,6 +30,24 @@ Turn the current synchronous Streamlit crawler into a resilient local crawling w
 | 4. Analytics correctness and performance | P1 | 1, 2 | Validated metrics, clearer charts, cached snapshots |
 | 5. Mericrawler brand and workflow UI | P1 | 2, 4 | Renamed product and smoother crawl/insight experience |
 | 6. Validation, migration, and rollout | P0 | 2–5 | Regression coverage, runbook, safe adoption path |
+
+### Progress on 2026-10-22
+
+Crawl recovery was committed as `ec2ef3c`. The queue UI follow-up implements
+persistent waiting notices, FIFO positions, distinct worker/network states,
+Crawl/Insights navigation, and preserved review filters/exports. All 104 tests
+pass; desktop and 375px navigation were checked with an isolated database.
+Phase 5 retains one open keyboard/reduced-motion verification item. Other
+phases retain their outstanding benchmark, recovery, and rollout criteria;
+this UI slice does not close those broader validation requirements.
+See [queue UX report](../reports/pm-261022-queue-ux.md).
+
+The user subsequently supplied AppstoreSpy references. The implemented visual
+direction is now white/light-gray with blue accents, a searchable Apps table,
+and an on-demand Analytics workspace with shared chart styling and date/language
+filters. The suite now passes 111 tests. Desktop and 375px checks confirm charts,
+filters, sidebar access and keyboard focus; reduced-motion browser emulation
+remains a separate check. See [design guidelines](../../docs/design-guidelines.md).
 
 ## Recommended architecture
 
@@ -55,6 +73,9 @@ The initial safe default is two concurrent app jobs, with languages within a job
 ## Cross-cutting acceptance targets
 
 - Queue at least five apps in one Streamlit tab without the page becoming blocked.
+- Every app waiting for a crawl slot shows a persistent notice naming the apps
+  currently crawling and explaining automatic start when a slot opens; queue
+  waiting, network retry, and no-worker states must be visually distinct.
 - A worker restart does not lose saved reviews or skip a page; queued/running jobs recover through lease expiry.
 - Every job visibly reports queued, running, throttled, partial, complete, failed, cancelled, and retrying states.
 - Rate-limited requests, network failures, retries, request latency, and effective throughput are distinguishable in logs and the UI.

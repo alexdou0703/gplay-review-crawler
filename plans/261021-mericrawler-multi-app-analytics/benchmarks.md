@@ -27,3 +27,17 @@ same target through `crawl_worker.py`: the job reached complete with 1 fetched,
 two app workers, a one-second shared minimum request interval, jitter, and
 adaptive cooldown after throttling; larger throughput changes still need soak
 metrics.
+
+## Crawl recovery follow-up (2026-10-22)
+
+At commit `ec2ef3c`, the prior session recorded **81 deterministic tests passing**
+and simulated checkpoint recovery from **16/20 to 20/20 languages**. A live
+sample with four apps, 22 languages each, capped at four reviews per language
+completed in **94.3 seconds** (352 fetched reviews; two concurrent app slots).
+This is a capped smoke result, not a large-history throughput benchmark or a
+rate-limit soak test.
+
+The queue UI follow-up passes **104 deterministic tests**, including 23 queue
+presentation/Streamlit regressions. It changes presentation and read-only queue
+queries, not worker concurrency or request pacing. Controlled latency breakdowns,
+large-dataset runs, and baseline-versus-current error ratios remain open.

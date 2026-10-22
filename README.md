@@ -20,7 +20,7 @@ Crawl Google Play reviews into a local SQLite workspace for product analysis. Me
 
 ```bash
 pip install -r requirements.txt
-streamlit run src/app.py
+MERICRAWLER_EMBED_WORKER=0 streamlit run src/app.py
 
 # In another terminal, run the local queue worker
 python src/crawl_worker.py --db data/reviews.db --workers 2 --min-request-interval 1.0
@@ -30,15 +30,49 @@ Queue one or more apps from the UI, one per line. The browser remains available 
 results and queue controls while the worker crawls. SQLite and the worker are a
 single-host deployment model; they are not a distributed scheduler.
 
-The Streamlit-hosted demo starts an embedded worker with two app slots automatically because the
-hosting service runs only the UI process. For local production-style operation,
-set `MERICRAWLER_EMBED_WORKER=0` and run the separate worker command above.
+By default, `streamlit run src/app.py` starts an embedded worker with two app
+slots, including on Streamlit-hosted demos. The separate-worker setup above
+disables it with `MERICRAWLER_EMBED_WORKER=0` so only the dedicated worker runs.
 
 After upgrading, restart both the UI and any separate worker. Expired running or
 waiting jobs are recovered automatically (default lease: 90 seconds). Legacy jobs
 incorrectly marked complete between languages are also recovered if they have no
 finish timestamp. Retry keeps completed languages for the same job; queue a new
 crawl or sync when you want to refresh those languages.
+
+## Follow crawls and open results
+
+1. In **Crawl**, add one app per line and select the language and review limit.
+   Each crawl request appears as a row in the queue table. All active jobs
+   remain available alongside the latest 20 past attempts.
+2. When app slots are occupied, each pending row shows **Queued**, its queue
+   position and next step. The shared notice names apps currently processing. It starts
+   automatically when a slot opens; there is no need to submit it again.
+3. Open an app from **Apps** or the sidebar to switch to **Insights**. Use **Refresh results** to load newly saved reviews. Search and
+   star filters survive switching between Crawl and Insights; CSV/JSON exports
+   use the filtered results.
+
+The queue table is read-only, with no row selection or details panel.
+**New reviews** counts inserts from that attempt; **Saved reviews** includes
+earlier crawls of the same app.
+
+Waiting guidance stays above the table and in its **Next step** column. It changes when
+an app starts or is cancelled; they do not repeatedly open popups. The queue
+refreshes automatically every five seconds.
+
+| Queue notice | Meaning / next action |
+|---|---|
+| Queued | Check Next step: the app waits for another crawl or for the crawl service. It starts automatically when available. |
+| Waiting for the crawl service | No recently responding active worker is visible. The job is saved; check that the worker is running. |
+| Worker not responding | A claimed job has stopped reporting recently. Saved reviews are kept; recovery can occur after its lease expires. |
+| Retrying request | This app already occupies a slot and is waiting before another network request. The countdown is a retry delay, not a completion estimate. |
+| Partial results / Rate limited / Failed | Open **Apps** or **Insights** to view any saved reviews. |
+
+Language progress can remain at the same fraction while pages in that language
+are still being saved. Worker
+visibility is inferred from active-job heartbeats; it is not a separate worker
+health monitor. Pending positions exclude cancelled jobs and retries that are
+not yet eligible to start.
 
 ## Full crawls (CLI)
 
@@ -83,3 +117,26 @@ pytest
 ```
 
 No network needed — the Google Play pagination layer is stubbed at a single seam.
+
+## App library and analytics workspace
+
+The light workspace has three views: **Crawl**, **Apps**, and **Insights**.
+Apps provides a searchable table of saved review counts, average ratings,
+languages, and last-save times; select an app and choose **Open insights**.
+
+In Insights, **Reviews** keeps search, rating filters and CSV/JSON downloads.
+**Analytics** renders only when selected. Apply a date range, languages and a
+daily/weekly/monthly interval together, then explore:
+
+- **Overview:** dated-review KPIs, review volume and rating over time, rating
+  distribution, language counts/shares and developer engagement.
+- **Versions:** ratings by first appearance in saved reviews, for known versions
+  with at least 30 reviews in the selection.
+- **Signals:** unusual review-volume windows and supporting languages/phrases.
+
+Small datasets still display their charts with a sample-size caution. All figures
+refer to saved reviews; language is a market proxy, and version dates are not
+verified release dates. Analytics date bounds include the full final day in UTC.
+
+Use Streamlit 1.47 or newer and restart the server after upgrading or changing
+`.streamlit/config.toml` so the new light theme is applied.
