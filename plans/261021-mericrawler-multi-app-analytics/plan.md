@@ -95,3 +95,14 @@ The initial safe default is two concurrent app jobs, with languages within a job
 - Streamlit documents one session per app view/browser tab and session state scoped to that session: https://docs.streamlit.io/develop/concepts/architecture/session-state
 - Streamlit's `AppSession` owns a `ScriptRunner` and widget state for a connected browser tab: https://github.com/streamlit/streamlit/blob/develop/lib/streamlit/runtime/app_session.py
 - The scraper transport currently retries requests internally and sleeps on the Play Gateway error marker; its review pagination also has a per-fetch maximum: https://github.com/JoMingyu/google-play-scraper/blob/master/google_play_scraper/utils/request.py and https://github.com/JoMingyu/google-play-scraper/blob/master/google_play_scraper/features/reviews.py
+
+## Follow-on proposal — 2026-10-23
+
+The [multi-user hosting proposal](../261023-multiuser-hosting/plan.md) builds on
+implemented crawl recovery and the table/analytics UI. It proposes authenticated
+private datasets, PostgreSQL and separately hosted workers for a future beta;
+it does not change the current single-host SQLite runtime. Remaining local
+benchmark/recovery criteria above are not marked complete by this proposal.
+There is no whole-plan blocking dependency: the new plan reuses committed
+features and carries its own isolation, load and restore gates. Its hosted
+storage migration must retain the existing checkpoint/recovery guarantees.

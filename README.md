@@ -7,7 +7,7 @@ Crawl Google Play reviews into a local SQLite workspace for product analysis. Me
 - Input by Google Play URL, package ID, or app name (store country picked up from the URL's `gl` param)
 - **Full-history crawls** with per-page checkpoints — interruptions and rate limits resume where they stopped, and partial results are always reported as partial, never as success
 - 22-language sweep deduplicated by review ID; each review stores its `lang`, `country`, and the `app_version` it was written on
-- **Incremental sync**: fetch only reviews newer than the stored dataset (↻ button in the sidebar, or `--sync` in the CLI) — re-fetched reviews also update thumbs-up counts and developer replies. Fast when the dataset is reasonably complete; the sidebar button is budget-capped (~5000 reviews/language per click) so shallow datasets can't turn a refresh into an hours-long walk — use the CLI for unbounded catch-up
+- **Incremental sync**: fetch only reviews newer than the stored dataset (**Apps → Sync reviews**, or `--sync` in the CLI) — re-fetched reviews also update thumbs-up counts and developer replies. Fast when the dataset is reasonably complete; the UI sync is budget-capped (~5000 reviews/language per click) so shallow datasets can't turn a refresh into an hours-long walk — use the CLI for unbounded catch-up
 - Star-rating filter, CSV / JSON export
 - Headless CLI for multi-hour crawls; the Streamlit UI reads the same database live
 - Durable multi-app queue with cancellation, retry, lease recovery, and per-page checkpoints
@@ -48,7 +48,7 @@ crawl or sync when you want to refresh those languages.
 2. When app slots are occupied, each pending row shows **Queued**, its queue
    position and next step. The shared notice names apps currently processing. It starts
    automatically when a slot opens; there is no need to submit it again.
-3. Open an app from **Apps** or the sidebar to switch to **Insights**. Use **Refresh results** to load newly saved reviews. Search and
+3. In **Apps**, choose **App to manage → Open insights** to switch to **Insights**. Use **Refresh results** to load newly saved reviews. Search and
    star filters survive switching between Crawl and Insights; CSV/JSON exports
    use the filtered results.
 
@@ -120,11 +120,15 @@ No network needed — the Google Play pagination layer is stubbed at a single se
 
 ## App library and analytics workspace
 
-The light workspace has three views: **Crawl**, **Apps**, and **Insights**.
+The light workspace has three views: **Crawl**, **Apps**, and **Insights**, with no
+Saved apps sidebar.
 Apps provides a searchable table of saved review counts, average ratings,
-languages, and last-save times; select an app and choose **Open insights**.
+languages, and last-save times. Choose **App to manage**, then **Open insights**,
+**Sync reviews**, or **Delete saved app**. Sync queues work in Crawl; deleting an
+app requires **Confirm deletion** and removes its saved reviews. **Keep app**
+cancels deletion. Changing the selected app clears a pending deletion confirmation.
 
-In Insights, **Reviews** keeps search, rating filters and CSV/JSON downloads.
+In Insights, **Single app → Reviews** keeps search, rating filters and CSV/JSON downloads.
 **Analytics** renders only when selected. Apply a date range, languages and a
 daily/weekly/monthly interval together, then explore:
 
@@ -135,8 +139,42 @@ daily/weekly/monthly interval together, then explore:
 - **Signals:** unusual review-volume windows and supporting languages/phrases.
 
 Small datasets still display their charts with a sample-size caution. All figures
-refer to saved reviews; language is a market proxy, and version dates are not
-verified release dates. Analytics date bounds include the full final day in UTC.
+refer to saved reviews. Stored language and country describe the crawl query,
+not verified reviewer language or location; version dates are not verified
+release dates. Analytics date bounds include the full final day in UTC.
+
+### Compare apps
+
+Open **Insights → Compare apps**, select **2–5 apps** with saved reviews, choose
+an inclusive UTC date range and **Daily**, **Weekly** or **Monthly**, then press
+**Compare**. Weekly periods run Monday–Sunday; first and last periods are clipped
+to the selected dates. Ranges are limited to 500 periods: use a coarser interval
+or shorter range when needed.
+
+- **Compare trends:** switch between average rating, 1–2 star share, saved review
+  count and developer reply rate. Hover a period to compare apps and sample counts.
+- **Rating distribution:** compare each app's 1–5 star proportions in horizontal
+  100% stacked bars.
+- **Comparison summary:** sortable counts, average ratings, low/five-star shares
+  and reply rates. **Trend data** exposes the period values as a table.
+- **Data coverage:** inspect all saved counts, observed review dates, last-save
+  time, query languages/stores, excluded rows and latest recorded crawl status.
+
+Metrics share one denominator: saved reviews with a supported, valid calendar
+date and a 1–5 star rating. Rating averages are weighted by review count, not by
+day. Reply rate counts reviews with a nonblank developer reply. An app with no
+eligible reviews in the range stays in the summary with a count of zero and
+unavailable rates; empty chart periods remain gaps rather than inferred zero activity.
+
+These are saved samples, not store-wide ratings, downloads or market share.
+Observed date ranges do not establish complete coverage, and crawl limits or
+query languages may differ between apps. No semantic classification or reviewer
+country inference is performed.
+
+Form edits apply when **Compare** is pressed. Applied filters survive switching
+between Insights modes; **Refresh data** reloads saved data without crawling.
+Opening an app from Apps returns to **Single app**. Comparison
+tables are read-only and do not open per-row detail panels.
 
 Use Streamlit 1.47 or newer and restart the server after upgrading or changing
 `.streamlit/config.toml` so the new light theme is applied.
