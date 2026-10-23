@@ -11,6 +11,7 @@ from storage.sqlite_store import queue_snapshot
 
 
 def open_reviews(package_id):
+    st.session_state.insights_mode = "Single app"
     st.session_state.current_package_id = package_id
     st.session_state.result_picker = package_id
     st.session_state.workspace_view = "Insights"
@@ -76,7 +77,7 @@ def render_queue(db_path, *, preview_mode=False):
     styles = [f"background-color: {colors[tone][0]}; color: {colors[tone][1]}; font-weight: 600" for _, tone in presented]
     styled = frame.style.apply(lambda _: styles, subset=["Status"])
     st.dataframe(styled,
-                         hide_index=True, use_container_width=True, height=min(650, 52 + 44 * len(jobs)),
+                         hide_index=True, use_container_width=True, row_height=52, height=min(700, 56 + 52 * len(jobs)),
                          column_config={
                              "App": st.column_config.TextColumn(width="medium"),
                              "Status": st.column_config.TextColumn(width="medium"),

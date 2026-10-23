@@ -20,6 +20,7 @@ from storage.sqlite_store import (
 from queue_ui import render_queue, open_reviews
 from crawl_worker import run_worker
 from analysis_ui import render_analysis_tab
+from comparison_ui import render_comparison
 from ui_styles import MERICRAWLER_CSS, FOOTER_CSS_EXTRA, BRAND_HEADER_HTML, FOOTER_HTML, info_box, success_box, warning_box, error_box
 
 # --- Config ---
@@ -83,54 +84,37 @@ if not PREVIEW_MODE and os.getenv("MERICRAWLER_EMBED_WORKER", "1") == "1":
         start_embedded_worker.clear()
         start_embedded_worker(DB_PATH)
 
-# --- Sidebar: previously crawled apps ---
-st.sidebar.title("Saved apps")
+# --- Library actions run as callbacks before navigation widgets render. ---
 pkg_entries = list_packages_with_names(DB_PATH)
-sync_target = None  # (pkg, name) — sync runs AFTER the loop so its spinner gets full sidebar width
-if pkg_entries:
-    for entry_pkg, entry_name in pkg_entries:
-        n = count_reviews(entry_pkg, DB_PATH)
-        col_open, col_sync, col_del = st.sidebar.columns([3.2, 0.9, 0.9])
-        with col_open:
-            if st.button(f"{entry_name}  ({n:,})", key=f"sidebar_{entry_pkg}"):
-                open_reviews(entry_pkg)
-        with col_sync:
-            if st.button("↻", key=f"sync_{entry_pkg}", help="Fetch reviews posted since the last crawl"):
-                sync_target = (entry_pkg, entry_name)
-        with col_del:
-            if st.button("×", key=f"del_{entry_pkg}", help="Delete this app and all its reviews"):
-                st.session_state.confirm_delete = entry_pkg
-                st.rerun()
 
-        # Inline confirmation right under the row — deleting is destructive
-        if st.session_state.get("confirm_delete") == entry_pkg:
-            st.sidebar.markdown(f"Delete **{entry_name}** and all its reviews?")
-            col_yes, col_no = st.sidebar.columns(2)
-            if col_yes.button("Delete", key=f"del_yes_{entry_pkg}"):
-                deleted = delete_package(entry_pkg, DB_PATH)
-                if st.session_state.get("current_package_id") == entry_pkg:
-                    st.session_state.pop("current_package_id", None)
-                    st.session_state.pop("current_df", None)
-                st.session_state.pop("confirm_delete", None)
-                st.session_state.last_crawl_summary = (
-                    "success", f"Deleted <strong>{html_escape(entry_name)}</strong> ({deleted:,} reviews)"
-                )
-                st.rerun()
-            if col_no.button("Cancel", key=f"del_no_{entry_pkg}"):
-                st.session_state.pop("confirm_delete", None)
-                st.rerun()
-else:
-    st.sidebar.info("No apps crawled yet.")
 
-if sync_target:
-    sync_pkg, sync_name = sync_target
-    enqueue_job(sync_pkg, DB_PATH, app_name=sync_name, mode="sync", langs=[])
+def sync_library_app(package_id, app_name):
+    if not count_reviews(package_id, DB_PATH):
+        st.session_state.last_crawl_summary = ("warning", "No saved reviews to sync yet. Wait for the initial crawl to save reviews.")
+        return
+    enqueue_job(package_id, DB_PATH, app_name=app_name, mode="sync", langs=[])
     st.session_state.last_crawl_summary = (
-        "success", f"Queued incremental sync for <strong>{html_escape(sync_name)}</strong>."
+        "success", f"Queued incremental sync for <strong>{html_escape(app_name)}</strong>."
     )
-    st.session_state.current_package_id = sync_pkg
+    st.session_state.current_package_id = package_id
     st.session_state.workspace_view = "Crawl"
-    st.rerun()
+
+
+def delete_library_app(package_id, app_name):
+    if not count_reviews(package_id, DB_PATH):
+        st.session_state.pop("confirm_delete", None)
+        return
+    deleted = delete_package(package_id, DB_PATH)
+    if st.session_state.get("current_package_id") == package_id:
+        st.session_state.pop("current_package_id", None)
+        st.session_state.pop("current_df", None)
+    if st.session_state.get("result_picker") == package_id:
+        st.session_state.pop("result_picker", None)
+    st.session_state.pop("library_picker", None)
+    st.session_state.pop("confirm_delete", None)
+    st.session_state.last_crawl_summary = (
+        "success", f"Deleted <strong>{html_escape(app_name)}</strong> ({deleted:,} reviews)"
+    )
 
 # --- Main panel ---
 st.markdown(BRAND_HEADER_HTML, unsafe_allow_html=True)
@@ -138,7 +122,7 @@ workspace_view = st.radio("Workspace", ["Crawl", "Apps", "Insights"], horizontal
 
 if workspace_view == "Apps":
     st.title("Apps")
-    st.caption("Your Google Play review library. Search an app and open its reviews or analytics.")
+    st.caption("Manage your saved apps. Open insights, sync reviews or remove an app from your library.")
     library = app_library_summary(DB_PATH)
     query = st.text_input("Search apps", placeholder="Search by app name or package ID", key="library_search")
     if query.strip():
@@ -148,12 +132,32 @@ if workspace_view == "Apps":
         st.info("No apps match this search." if query.strip() else "Your library is empty. Add Google Play links in Crawl to get started.")
     else:
         st.caption(f"{len(library):,} apps · {int(library['reviews'].sum()):,} saved reviews")
-        picker, action = st.columns([5, 1], vertical_alignment="bottom")
         names = library.set_index("package_id")["app_name"].to_dict()
-        with picker:
-            selected = st.selectbox("Open app", list(names), format_func=lambda p: f"{names[p]} · {p}", key="library_picker")
-        with action:
-            st.button("Open insights", type="primary", on_click=open_reviews, args=(selected,))
+        if st.session_state.get("library_picker") not in names:
+            st.session_state.library_picker = next(iter(names))
+        selected = st.selectbox("App to manage", list(names), format_func=lambda p: f"{names[p]} · {p}", key="library_picker")
+        has_reviews = bool(library.loc[library["package_id"].eq(selected), "reviews"].iloc[0])
+        if st.session_state.get("confirm_delete") != selected:
+            st.session_state.pop("confirm_delete", None)
+        open_col, sync_col, delete_col = st.columns(3)
+        open_col.button("Open insights", type="primary", on_click=open_reviews, args=(selected,), use_container_width=True)
+        sync_col.button("Sync reviews", key="library_sync", on_click=sync_library_app,
+                        args=(selected, names[selected]), use_container_width=True,
+                        disabled=not has_reviews,
+                        help="Queue a crawl to fetch reviews posted since the last sync" if has_reviews else "Available after the first reviews have been saved")
+        if delete_col.button("Delete saved app", key="library_delete", use_container_width=True,
+                             disabled=not has_reviews,
+                             help="Delete this app's saved reviews" if has_reviews else "This app has no saved reviews to delete"):
+            st.session_state.confirm_delete = selected
+        if st.session_state.get("confirm_delete") == selected:
+            with st.container(border=True):
+                st.warning(f"Delete {names[selected]} ({selected}) and all its saved reviews? This cannot be undone.")
+                confirm, cancel = st.columns(2)
+                confirm.button("Confirm deletion", key="library_delete_confirm", on_click=delete_library_app,
+                               args=(selected, names[selected]), use_container_width=True)
+                if cancel.button("Keep app", key="library_delete_cancel", use_container_width=True):
+                    st.session_state.pop("confirm_delete", None)
+                    st.rerun()
         library_display = library.copy()
         library_display["last_saved"] = pd.to_datetime(library_display["last_saved"], utc=True).dt.strftime("%Y-%m-%d %H:%M")
         st.dataframe(library_display.rename(columns={"app_name": "App", "package_id": "Package ID", "reviews": "Reviews",
@@ -161,7 +165,7 @@ if workspace_view == "Apps":
                      column_order=["App", "Package ID", "Reviews", "Average rating", "Languages", "Last saved (UTC)"],
                      column_config={"Average rating": st.column_config.NumberColumn(format="%.2f"),
                                     "Reviews": st.column_config.NumberColumn(format="%d")},
-                     hide_index=True, use_container_width=True, height=min(600, 40 + len(library) * 36))
+                     hide_index=True, use_container_width=True, row_height=52, height=min(650, 56 + len(library) * 52))
 
 if workspace_view == "Crawl":
     st.title("Crawl workspace")
@@ -245,6 +249,11 @@ if workspace_view == "Crawl":
 
 if workspace_view == "Insights":
     st.title("App insights")
+    insights_mode = st.radio("Insights mode", ["Single app", "Compare apps"], horizontal=True, key="insights_mode")
+    if insights_mode == "Compare apps":
+        render_comparison(DB_PATH, pkg_entries)
+
+if workspace_view == "Insights" and insights_mode == "Single app":
     # --- Results ---
     options = dict(pkg_entries)
     current = st.session_state.get("current_package_id", "")
@@ -359,7 +368,8 @@ if workspace_view == "Insights":
                     "Date": st.column_config.TextColumn(width="small"),
                 },
                 use_container_width=True,
-                height=500,
+                row_height=52,
+                height=560,
             )
             st.caption(f"Showing {len(filtered):,} of {len(df):,} reviews")
 
@@ -367,7 +377,7 @@ if workspace_view == "Insights":
             render_analysis_tab(df, pkg)
 
     else:
-        st.info("No saved reviews for this app yet. Follow its progress in Crawl and refresh results after the first page is saved." if pkg else "Choose a crawled app from the sidebar, or add your first app in Crawl.")
+        st.info("No saved reviews for this app yet. Follow its progress in Crawl and refresh results after the first page is saved." if pkg else "Add your first app in Crawl, then open its reviews from Apps.")
 
 # --- Footer (always visible) ---
 st.markdown(FOOTER_HTML, unsafe_allow_html=True)
